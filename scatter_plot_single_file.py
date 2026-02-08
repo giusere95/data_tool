@@ -1,295 +1,236 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import os
-import json
+from io import StringIO
 
 st.set_page_config(layout="wide")
 
-# -----------------------------
-# Folders & session state
-# -----------------------------
-DATA_FOLDER = "data"
-os.makedirs(DATA_FOLDER, exist_ok=True)
-UNIT_FILE = os.path.join(DATA_FOLDER, "units.json")
-
+# ---------------------------
+# Session storage
+# ---------------------------
 if "df" not in st.session_state:
     st.session_state.df = None
-if "current_file" not in st.session_state:
-    st.session_state.current_file = None
+if "units" not in st.session_state:
+    st.session_state.units = {}
 
+# ---------------------------
 # Tabs
-tab_upload, tab_plot = st.tabs(["Upload / Convert", "Scatter Plot"])
+# ---------------------------
+tab1, tab2 = st.tabs(["TXT → Parquet", "Scatter plots"])
 
-# ==========================================================
-# TAB 1 — Upload / Convert TXT
-# ==========================================================
-with tab_upload:
+# =====================================================
+# TAB 1 — TXT upload and conversion
+# =====================================================
+with tab1:
     st.header("Upload TXT and convert to Parquet")
 
-    uploaded_txt = st.file_uploader(
-        "Upload TXT files",
-        type=["txt"],
-        accept_multiple_files=True
-    )
+    uploaded_txt = st.file_uploader("Upload TXT file", type=["txt"])
 
-    if uploaded_txt and st.button("Convert to Parquet"):
-        last_parquet_path = None
-        units_dict = {}
+    if uploaded_txt is not None:
+        content = uploaded_txt.read().decode("utf-8")
+        txt_buffer = StringIO(content)
 
-        for file in uploaded_txt:
-            try:
-                df_raw = pd.read_csv(file, sep="\t", header=None)
+        # Read header and units
+        header = pd.read_csv(txt_buffer, sep="\t", nrows=1, header=None)
+        txt_buffer.seek(0)
+        units = pd.read_csv(txt_buffer, sep="\t", skiprows=1, nrows=1, header=None)
 
-                headers = df_raw.iloc[0].tolist()
-                units = df_raw.iloc[1].tolist()
-                df_data = df_raw.iloc[2:].reset_index(drop=True)
-                df_data.columns = headers
+        txt_buffer.seek(0)
+        df = pd.read_csv(txt_buffer, sep="\t", skiprows=2, header=None)
 
-                # Convert numeric columns
-                df_data = df_data.apply(pd.to_numeric, errors="ignore")
+        df.columns = header.iloc[0].astype(str)
 
-                # Save parquet
-                parquet_name = file.name.replace(".txt", ".parquet")
-                parquet_path = os.path.join(DATA_FOLDER, parquet_name)
-                df_data.to_parquet(parquet_path, index=False)
+        # Convert numeric where possible
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-                # Save units
-                for h, u in zip(headers, units):
-                    units_dict[h] = u
+        # Save units
+        unit_dict = {}
+        for col, unit in zip(df.columns, units.iloc[0]):
+            if str(unit) != "-" and str(unit) != "nan":
+                unit_dict[col] = str(unit)
 
-                last_parquet_path = parquet_path
-                st.success(f"{file.name} → {parquet_name}")
+        st.session_state.df = df
+        st.session_state.units = unit_dict
 
-            except Exception as e:
-                st.error(f"Error with {file.name}: {e}")
+        # Save parquet locally (optional)
+        parquet_name = uploaded_txt.name.replace(".txt", ".parquet")
+        df.to_parquet(parquet_name, index=False)
 
-        if units_dict:
-            with open(UNIT_FILE, "w", encoding="utf-8") as f:
-                json.dump(units_dict, f, indent=2)
+        st.success(f"Converted and loaded: {parquet_name}")
+        st.info("Now go to the Scatter plots tab")
 
-        if last_parquet_path:
-            st.session_state.df = pd.read_parquet(last_parquet_path)
-            st.session_state.current_file = os.path.basename(last_parquet_path)
-            st.rerun()
+# =====================================================
+# TAB 2 — Scatter plots
+# =====================================================
+with tab2:
+    st.header("Scatter plots")
 
-    st.divider()
-    st.subheader("Or upload a Parquet file directly")
+    # Upload parquet directly
+    uploaded_parquet = st.file_uploader("Upload Parquet file", type=["parquet"])
 
-    uploaded_parquet = st.file_uploader("Upload Parquet", type=["parquet"])
     if uploaded_parquet is not None:
-        st.session_state.df = pd.read_parquet(uploaded_parquet)
-        st.session_state.current_file = uploaded_parquet.name
-        st.rerun()
-
-
-# ==========================================================
-# TAB 2 — Scatter Plot
-# ==========================================================
-with tab_plot:
-    st.header("Scatter Plot")
+        df = pd.read_parquet(uploaded_parquet)
+        st.session_state.df = df
+        st.session_state.units = {}  # no units available
 
     df = st.session_state.df
-
-    # Load units
-    units_dict = {}
-    if os.path.exists(UNIT_FILE):
-        with open(UNIT_FILE, "r", encoding="utf-8") as f:
-            units_dict = json.load(f)
+    units = st.session_state.units
 
     if df is None:
-        st.info("Upload or load a dataset to start.")
+        st.warning("Load a TXT or Parquet file first")
+        st.stop()
+
+    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+
+    if len(numeric_cols) < 2:
+        st.error("Need at least two numeric columns")
+        st.stop()
+
+    # =====================================================
+    # SIDEBAR CONTROLS
+    # =====================================================
+    st.sidebar.header("Plots")
+
+    n_plots = st.sidebar.number_input("Number of plots", 1, 6, 1)
+    plots_per_row = st.sidebar.number_input("Plots per row", 1, 3, 2)
+
+    # =====================================================
+    # GLOBAL FILTERS — COMPACT UI
+    # =====================================================
+    st.sidebar.header("Global Filters")
+
+    filter_values = {}
+    active_filters = []
+
+    for col in numeric_cols:
+        row = st.sidebar.columns([1.5, 1, 1])
+
+        enabled = row[0].checkbox(col, key=f"enable_{col}")
+
+        if enabled:
+            min_val = row[1].number_input(
+                "min",
+                value=float(df[col].min()),
+                key=f"{col}_min",
+                label_visibility="collapsed"
+            )
+            max_val = row[2].number_input(
+                "max",
+                value=float(df[col].max()),
+                key=f"{col}_max",
+                label_visibility="collapsed"
+            )
+
+            filter_values[col] = (min_val, max_val)
+            active_filters.append(col)
+
+    # Apply filters globally
+    if active_filters:
+        df_filtered = df.copy()
+        for col, (mn, mx) in filter_values.items():
+            df_filtered = df_filtered[
+                (df_filtered[col] >= mn) & (df_filtered[col] <= mx)
+            ]
+        has_filter = True
     else:
-        st.success(f"Loaded: {st.session_state.current_file}")
+        df_filtered = pd.DataFrame()
+        has_filter = False
 
-        numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    # =====================================================
+    # PLOTS
+    # =====================================================
+    plot_index = 0
 
-        if len(numeric_cols) < 2:
-            st.warning("Need at least two numeric columns.")
-        else:
-            # -----------------------------
-            # Sidebar — Layout
-            # -----------------------------
-            st.sidebar.header("Layout")
-            n_plots = st.sidebar.number_input("Number of plots", 1, 6, 2)
-            plots_per_row = st.sidebar.number_input("Plots per row", 1, 3, 2)
+    for row_start in range(0, n_plots, plots_per_row):
+        cols = st.columns(plots_per_row)
 
-            # -----------------------------
-            # Sidebar — Global Filters
-            # -----------------------------
-            st.sidebar.header("Global Filters")
+        for col_container in cols:
+            if plot_index >= n_plots:
+                break
 
-            filter_cols = st.sidebar.multiselect("Columns to filter", numeric_cols)
-            filter_values = {}
+            with col_container:
+                st.subheader(f"Plot {plot_index + 1}")
 
-            for col in filter_cols:
-                min_val = st.sidebar.number_input(
-                    f"{col} min", value=float(df[col].min()), key=f"{col}_min"
+                x_col = st.selectbox(
+                    "X",
+                    numeric_cols,
+                    key=f"x_{plot_index}"
                 )
-                max_val = st.sidebar.number_input(
-                    f"{col} max", value=float(df[col].max()), key=f"{col}_max"
-                )
-                filter_values[col] = (min_val, max_val)
-
-            # Apply filters
-            if filter_cols:
-                df_filtered = df.copy()
-                for col, (mn, mx) in filter_values.items():
-                    df_filtered = df_filtered[
-                        (df_filtered[col] >= mn) & (df_filtered[col] <= mx)
-                    ]
-                has_filter = True
-            else:
-                df_filtered = pd.DataFrame()
-                has_filter = False
-
-            # -----------------------------
-            # Download filtered data
-            # -----------------------------
-            if has_filter and not df_filtered.empty:
-                st.sidebar.header("Export")
-                st.sidebar.download_button(
-                    "Download filtered (CSV)",
-                    df_filtered.to_csv(index=False),
-                    file_name="filtered_data.csv",
-                    mime="text/csv",
+                y_col = st.selectbox(
+                    "Y",
+                    numeric_cols,
+                    index=1 if len(numeric_cols) > 1 else 0,
+                    key=f"y_{plot_index}"
                 )
 
-                st.sidebar.download_button(
-                    "Download filtered (Parquet)",
-                    df_filtered.to_parquet(index=False),
-                    file_name="filtered_data.parquet",
+                # Grid spacing (same for X and Y)
+                spacing = st.number_input(
+                    "Grid spacing",
+                    value=float((df[x_col].max() - df[x_col].min()) / 10),
+                    key=f"spacing_{plot_index}"
                 )
 
-            # -----------------------------
-            # Sidebar — Axis spacing per plot
-            # -----------------------------
-            st.sidebar.header("Axis spacing per plot")
+                # Units
+                x_label = f"{x_col} ({units.get(x_col, '')})"
+                y_label = f"{y_col} ({units.get(y_col, '')})"
 
-            x_spacing_list = []
-            y_spacing_list = []
+                fig = go.Figure()
 
-            for i in range(n_plots):
-                st.sidebar.markdown(f"**Plot {i+1}**")
-                x_spacing_list.append(
-                    st.sidebar.number_input(
-                        "X spacing",
-                        min_value=1.0,
-                        value=1.0,
-                        key=f"xspace_{i}",
-                    )
+                # Plot ALL data first (blue)
+                fig.add_trace(go.Scattergl(
+                    x=df[x_col],
+                    y=df[y_col],
+                    mode="markers",
+                    marker=dict(color="blue", size=4),
+                    name="All data"
+                ))
+
+                # Plot filtered data ON TOP (red)
+                if has_filter and not df_filtered.empty:
+                    fig.add_trace(go.Scattergl(
+                        x=df_filtered[x_col],
+                        y=df_filtered[y_col],
+                        mode="markers",
+                        marker=dict(color="red", size=6),
+                        name="Filtered"
+                    ))
+
+                # Axis ranges
+                x_min, x_max = df[x_col].min(), df[x_col].max()
+                y_min, y_max = df[y_col].min(), df[y_col].max()
+
+                # Grid values
+                x_ticks = np.arange(x_min, x_max + spacing, spacing)
+                y_ticks = np.arange(y_min, y_max + spacing, spacing)
+
+                fig.update_layout(
+                    template="plotly_white",
+                    height=400,
+                    xaxis=dict(
+                        title=x_label,
+                        tickmode="array",
+                        tickvals=x_ticks,
+                        showgrid=True,
+                        gridcolor="lightgray",
+                        griddash="solid",
+                        tickformat=",.0f"
+                    ),
+                    yaxis=dict(
+                        title=y_label,
+                        tickmode="array",
+                        tickvals=y_ticks,
+                        showgrid=True,
+                        gridcolor="lightgray",
+                        griddash="solid",
+                        tickformat=",.0f"
+                    ),
+                    margin=dict(l=40, r=20, t=40, b=40),
+                    showlegend=False
                 )
-                y_spacing_list.append(
-                    st.sidebar.number_input(
-                        "Y spacing",
-                        min_value=1.0,
-                        value=1.0,
-                        key=f"yspace_{i}",
-                    )
-                )
 
-            # -----------------------------
-            # Plot grid layout
-            # -----------------------------
-            rows = []
-            for i in range(n_plots):
-                if i % plots_per_row == 0:
-                    rows.append(st.columns(plots_per_row))
+                st.plotly_chart(fig, use_container_width=True)
 
-                col = rows[i // plots_per_row][i % plots_per_row]
-
-                with col:
-                    st.subheader(f"Plot {i+1}")
-
-                    x_col = st.selectbox(
-                        "X axis",
-                        numeric_cols,
-                        key=f"x_{i}",
-                    )
-                    y_col = st.selectbox(
-                        "Y axis",
-                        numeric_cols,
-                        key=f"y_{i}",
-                    )
-
-                    # Axis labels with units
-                    x_label = x_col
-                    y_label = y_col
-
-                    if x_col in units_dict and units_dict[x_col] not in ["-", "", None]:
-                        x_label += f" ({units_dict[x_col]})"
-                    if y_col in units_dict and units_dict[y_col] not in ["-", "", None]:
-                        y_label += f" ({units_dict[y_col]})"
-
-                    # Base vs filtered separation
-                    if has_filter and not df_filtered.empty:
-                        df_base = df.drop(df_filtered.index)
-                    else:
-                        df_base = df
-
-                    fig = go.Figure()
-
-                    # Base points (blue)
-                    fig.add_trace(
-                        go.Scatter(
-                            x=df_base[x_col],
-                            y=df_base[y_col],
-                            mode="markers",
-                            marker=dict(color="blue", opacity=0.35, size=7),
-                            name="All"
-                        )
-                    )
-
-                    # Filtered points (red ON TOP)
-                    if has_filter and not df_filtered.empty:
-                        fig.add_trace(
-                            go.Scatter(
-                                x=df_filtered[x_col],
-                                y=df_filtered[y_col],
-                                mode="markers",
-                                marker=dict(color="red", size=9),
-                                name="Filtered"
-                            )
-                        )
-
-                    # -----------------------------
-                    # Vertical grid lines (SOLID)
-                    # spacing = X spacing
-                    # -----------------------------
-                    x_min = df[x_col].min()
-                    x_max = df[x_col].max()
-                    spacing = x_spacing_list[i]
-
-                    if spacing > 0:
-                        x_lines = []
-                        val = x_min - (x_min % spacing)
-                        while val <= x_max:
-                            x_lines.append(val)
-                            val += spacing
-
-                        for xv in x_lines:
-                            fig.add_vline(
-                                x=xv,
-                                line_width=1,
-                                line_color="lightgray"
-                            )
-
-                    # Layout
-                    fig.update_layout(
-                        plot_bgcolor="white",
-                        paper_bgcolor="white",
-                        height=500,
-                        xaxis=dict(
-                            title=x_label,
-                            dtick=x_spacing_list[i],
-                            tickformat="g"
-                        ),
-                        yaxis=dict(
-                            title=y_label,
-                            dtick=y_spacing_list[i],
-                            tickformat="g"
-                        ),
-                        margin=dict(l=40, r=10, t=40, b=40),
-                    )
-
-                    st.plotly_chart(fig, use_container_width=True)
+            plot_index += 1
