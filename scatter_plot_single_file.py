@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import os
 import json
@@ -174,27 +173,29 @@ with tab_plot:
                     else:
                         df_base = df.copy()
 
-                    # Base scatter
-                    fig = px.scatter(
-                        df_base,
-                        x=x_col,
-                        y=y_col,
-                        opacity=0.4,
-                        color_discrete_sequence=["blue"],
-                        labels={
-                            x_col: f"{x_col} ({units_dict.get(x_col, '')})",
-                            y_col: f"{y_col} ({units_dict.get(y_col, '')})"
-                        },
+                    fig = go.Figure()
+
+                    # Base points (blue, semi-transparent)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=df_base[x_col],
+                            y=df_base[y_col],
+                            mode='markers',
+                            marker=dict(color='blue', opacity=0.4, size=8),
+                            name='All Points'
+                        )
                     )
 
-                    # Filtered points on top
+                    # Filtered points (red, full opacity)
                     if has_filter and not df_filtered.empty:
-                        fig.add_scatter(
-                            x=df_filtered[x_col],
-                            y=df_filtered[y_col],
-                            mode="markers",
-                            name="Filtered",
-                            marker=dict(color="red", size=10),
+                        fig.add_trace(
+                            go.Scatter(
+                                x=df_filtered[x_col],
+                                y=df_filtered[y_col],
+                                mode='markers',
+                                marker=dict(color='red', size=10),
+                                name='Filtered',
+                            )
                         )
 
                     # Add vertical grid lines
