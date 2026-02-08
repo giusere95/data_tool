@@ -126,7 +126,7 @@ with tab_plot:
                 max_val = st.sidebar.number_input(f"{col} max", value=float(df[col].max()))
                 filter_values[col] = (min_val, max_val)
 
-            # Axis/grid spacing per plot
+            # Per-plot axis/grid spacing
             st.sidebar.header("Per-plot Axis/Grid Spacing")
             x_spacing_list = []
             y_spacing_list = []
@@ -166,9 +166,17 @@ with tab_plot:
                     x_col = st.selectbox(f"X axis (Plot {i+1})", numeric_cols, key=f"x_{i}")
                     y_col = st.selectbox(f"Y axis (Plot {i+1})", numeric_cols, key=f"y_{i}")
 
+                    # -----------------------------
+                    # Separate base and filtered points
+                    # -----------------------------
+                    if has_filter and not df_filtered.empty:
+                        df_base = df.drop(df_filtered.index)
+                    else:
+                        df_base = df.copy()
+
                     # Base scatter
                     fig = px.scatter(
-                        df,
+                        df_base,
                         x=x_col,
                         y=y_col,
                         opacity=0.4,
@@ -179,7 +187,7 @@ with tab_plot:
                         },
                     )
 
-                    # Add filtered points
+                    # Filtered points on top
                     if has_filter and not df_filtered.empty:
                         fig.add_scatter(
                             x=df_filtered[x_col],
@@ -189,12 +197,13 @@ with tab_plot:
                             marker=dict(color="red", size=10),
                         )
 
-                    # Add vertical grid lines per spacing
+                    # Add vertical grid lines
                     x_min, x_max = df[x_col].min(), df[x_col].max()
                     x_lines = list(range(int(x_min), int(x_max)+1, vertical_spacing_list[i]))
                     for x in x_lines:
                         fig.add_vline(x=x, line_width=1, line_dash="dash", line_color="lightgray")
 
+                    # Layout
                     fig.update_layout(
                         plot_bgcolor="white",
                         paper_bgcolor="white",
