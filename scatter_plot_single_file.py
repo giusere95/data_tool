@@ -1,194 +1,140 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import os
-from io import BytesIO
+import io
+import numpy as np
+import plotly.express as px
 
 st.set_page_config(layout="wide")
 
-# =========================
-# CONFIG
-# =========================
-DATA_FOLDER = "Data"
+st.title("Data Tool")
+
+# ============================
+# Folders (for local + cloud)
+# ============================
+DATA_FOLDER = "data"
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
-st.title("Data Tool – Scatter & Converter")
+# ============================
+# Tabs
+# ============================
+tab1, tab2 = st.tabs(["TXT → Parquet Converter", "Scatter Plot Viewer"])
 
-# =========================
-# FUNCTIONS
-# =========================
+# ============================================================
+# TAB 1 — TXT CONVERTER (NO PLOTS HERE)
+# ============================================================
+with tab1:
+    st.header("Upload TXT and convert to Parquet")
 
-def txt_to_dataframe(uploaded_file):
-    """Convert TXT (tab separated) to DataFrame and extract units"""
-    df_raw = pd.read_csv(uploaded_file, sep="\t", header=None)
-
-    headers = df_raw.iloc[0].tolist()
-    units = df_raw.iloc[1].tolist()
-
-    df = df_raw.iloc[2:].reset_index(drop=True)
-    df.columns = headers
-
-    # Convert numeric where possible
-    df = df.apply(pd.to_numeric, errors="ignore")
-
-    return df, dict(zip(headers, units))
-
-
-def dataframe_to_parquet_bytes(df):
-    buffer = BytesIO()
-    df.to_parquet(buffer, index=False)
-    buffer.seek(0)
-    return buffer
-
-
-# =========================
-# SIDEBAR – DATA SOURCES
-# =========================
-st.sidebar.header("Data Sources")
-
-dataframes = []
-column_units = {}
-
-# ---- Existing Parquet files ----
-parquet_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".parquet")]
-
-if parquet_files:
-    selected_parquets = st.sidebar.multiselect(
-        "Select Parquet files",
-        parquet_files
+    txt_files = st.file_uploader(
+        "Upload one or more TXT files",
+        type=["txt"],
+        accept_multiple_files=True
     )
 
-    for f in selected_parquets:
-        path = os.path.join(DATA_FOLDER, f)
-        df_pq = pd.read_parquet(path)
-        dataframes.append(df_pq)
+    if txt_files:
+        for file in txt_files:
+            st.write(f"Processing: {file.name}")
 
-# =========================
-# TXT UPLOAD SECTION
-# =========================
-st.sidebar.markdown("---")
-st.sidebar.subheader("Upload TXT")
+            # Read TXT
+            try:
+                df = pd.read_csv(file, sep=None, engine="python")
 
-uploaded_txt_files = st.sidebar.file_uploader(
-    "Upload TXT files",
-    type=["txt"],
-    accept_multiple_files=True
-)
+                # Save parquet
+                parquet_name = file.name.replace(".txt", ".parquet")
+                parquet_path = os.path.join(DATA_FOLDER, parquet_name)
+                df.to_parquet(parquet_path, index=False)
 
-uploaded_data = []
+                st.success(f"Saved as {parquet_name}")
 
-if uploaded_txt_files:
-    for uploaded_file in uploaded_txt_files:
-        df_txt, units_txt = txt_to_dataframe(uploaded_file)
-        uploaded_data.append((uploaded_file.name, df_txt, units_txt))
+            except Exception as e:
+                st.error(f"Error processing {file.name}: {e}")
 
-# =========================
-# MAIN AREA – PREVIEW & SAVE
-# =========================
-if uploaded_data:
-    st.header("Uploaded TXT Preview")
+    st.info("Converted files are stored and available in the Scatter Plot tab.")
 
-    for name, df_txt, units_txt in uploaded_data:
-        with st.expander(f"{name} ({len(df_txt)} rows)"):
-            st.dataframe(df_txt.head(50))
+
+# ============================================================
+# TAB 2 — SCATTER PLOTS
+# ============================================================
+with tab2:
+    st.header("Scatter Plot Viewer")
+
+    # --- Option 1: Upload parquet directly ---
+    uploaded_parquet = st.file_uploader(
+        "Upload a Parquet file",
+        type=["parquet"]
+    )
+
+    df = None
+
+    if uploaded_parquet is not None:
+        df = pd.read_parquet(uploaded_parquet)
+        st.success("Using uploaded Parquet file")
+
+    else:
+        # --- Option 2: Load from data folder ---
+        parquet_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".parquet")]
+
+        if parquet_files:
+            selected_file = st.selectbox("Or select a file from server", parquet_files)
+            df = pd.read_parquet(os.path.join(DATA_FOLDER, selected_file))
+        else:
+            st.warning("No parquet files available. Upload one or convert a TXT first.")
+
+    # ============================================================
+    # Plot section
+    # ============================================================
+    if df is not None:
+
+        numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+
+        if len(numeric_cols) < 2:
+            st.warning("Need at least two numeric columns.")
+        else:
+            st.subheader("Scatter Plot")
 
             col1, col2 = st.columns(2)
 
-            # Save to server
             with col1:
-                if st.button(f"Save {name} as Parquet"):
-                    save_name = name.replace(".txt", ".parquet")
-                    path = os.path.join(DATA_FOLDER, save_name)
-                    df_txt.to_parquet(path, index=False)
-                    st.success(f"Saved to Data/{save_name}")
+                x_col = st.selectbox("X axis", numeric_cols)
 
-            # Download
             with col2:
-                parquet_bytes = dataframe_to_parquet_bytes(df_txt)
-                st.download_button(
-                    label="Download Parquet",
-                    data=parquet_bytes,
-                    file_name=name.replace(".txt", ".parquet"),
-                    mime="application/octet-stream"
-                )
+                y_col = st.selectbox("Y axis", numeric_cols)
 
-        # Add to active dataset
-        dataframes.append(df_txt)
-        column_units.update(units_txt)
+            # Simple filtering UI
+            st.markdown("### Filter")
 
-# =========================
-# STOP IF NO DATA
-# =========================
-if not dataframes:
-    st.info("Upload TXT files or select Parquet files from sidebar.")
-    st.stop()
+            filter_col = st.selectbox("Column to filter", numeric_cols)
 
-# =========================
-# MERGE DATA
-# =========================
-df = pd.concat(dataframes, ignore_index=True)
+            min_val = float(df[filter_col].min())
+            max_val = float(df[filter_col].max())
 
-# =========================
-# FILTER UI (Professional Compact)
-# =========================
-st.sidebar.markdown("---")
-st.sidebar.header("Filters")
+            col_min, col_max = st.columns(2)
 
-numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
-filters = {}
+            with col_min:
+                user_min = st.number_input("Min value", value=min_val)
 
-for col in numeric_cols:
-    with st.sidebar.expander(col, expanded=False):
-        min_val = float(df[col].min())
-        max_val = float(df[col].max())
+            with col_max:
+                user_max = st.number_input("Max value", value=max_val)
 
-        c1, c2 = st.columns(2)
-        with c1:
-            min_input = st.number_input(
-                "Min",
-                value=min_val,
-                key=f"{col}_min"
-            )
-        with c2:
-            max_input = st.number_input(
-                "Max",
-                value=max_val,
-                key=f"{col}_max"
+            df_filtered = df[(df[filter_col] >= user_min) & (df[filter_col] <= user_max)]
+
+            # Highlight filtered points
+            df["Selection"] = "Other"
+            df.loc[df_filtered.index, "Selection"] = "Filtered"
+
+            fig = px.scatter(
+                df,
+                x=x_col,
+                y=y_col,
+                color="Selection",
+                template="plotly_white"
             )
 
-        filters[col] = (min_input, max_input)
+            fig.update_layout(
+                height=600,
+                xaxis=dict(tickformat="d"),
+                yaxis=dict(tickformat="d")
+            )
 
-# Apply filters
-for col, (min_v, max_v) in filters.items():
-    df = df[(df[col] >= min_v) & (df[col] <= max_v)]
-
-# =========================
-# PLOT SECTION
-# =========================
-st.sidebar.markdown("---")
-st.sidebar.header("Plot")
-
-all_columns = df.columns.tolist()
-
-x_col = st.sidebar.selectbox("X axis", all_columns)
-y_col = st.sidebar.selectbox("Y axis", all_columns)
-
-st.subheader("Scatter Plot")
-st.write(f"Rows after filtering: {len(df)}")
-
-st.scatter_chart(df[[x_col, y_col]])
-
-# =========================
-# DOWNLOAD FILTERED DATA
-# =========================
-st.markdown("---")
-st.subheader("Export filtered data")
-
-filtered_bytes = dataframe_to_parquet_bytes(df)
-
-st.download_button(
-    label="Download filtered Parquet",
-    data=filtered_bytes,
-    file_name="filtered.parquet",
-    mime="application/octet-stream"
-)
+            st.plotly_chart(fig, use_container_width=True)
