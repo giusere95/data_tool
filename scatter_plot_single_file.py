@@ -1,140 +1,153 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import os
 import io
-import numpy as np
-import plotly.express as px
 
 st.set_page_config(layout="wide")
 
-st.title("Data Tool")
-
-# ============================
-# Folders (for local + cloud)
-# ============================
 DATA_FOLDER = "data"
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
-# ============================
-# Tabs
-# ============================
-tab1, tab2 = st.tabs(["TXT → Parquet Converter", "Scatter Plot Viewer"])
+# Session state to remember current dataset
+if "df" not in st.session_state:
+    st.session_state.df = None
+if "current_file" not in st.session_state:
+    st.session_state.current_file = None
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = 0
 
-# ============================================================
-# TAB 1 — TXT CONVERTER (NO PLOTS HERE)
-# ============================================================
-with tab1:
+tabs = st.tabs(["Upload / Convert", "Scatter Plot"])
+
+# ======================
+# TAB 1 — Upload / Convert
+# ======================
+with tabs[0]:
     st.header("Upload TXT and convert to Parquet")
 
-    txt_files = st.file_uploader(
-        "Upload one or more TXT files",
+    uploaded_txt = st.file_uploader(
+        "Upload TXT files",
         type=["txt"],
         accept_multiple_files=True
     )
 
-    if txt_files:
-        for file in txt_files:
-            st.write(f"Processing: {file.name}")
+    if uploaded_txt and st.button("Convert to Parquet"):
+        last_parquet_path = None
 
-            # Read TXT
+        for file in uploaded_txt:
             try:
                 df = pd.read_csv(file, sep=None, engine="python")
 
-                # Save parquet
                 parquet_name = file.name.replace(".txt", ".parquet")
                 parquet_path = os.path.join(DATA_FOLDER, parquet_name)
                 df.to_parquet(parquet_path, index=False)
 
-                st.success(f"Saved as {parquet_name}")
+                st.success(f"{file.name} → {parquet_name}")
+                last_parquet_path = parquet_path
 
             except Exception as e:
-                st.error(f"Error processing {file.name}: {e}")
+                st.error(f"Error with {file.name}: {e}")
 
-    st.info("Converted files are stored and available in the Scatter Plot tab.")
+        # Automatically load last converted file
+        if last_parquet_path:
+            st.session_state.df = pd.read_parquet(last_parquet_path)
+            st.session_state.current_file = os.path.basename(last_parquet_path)
+            st.session_state.active_tab = 1
+            st.rerun()
 
+    st.divider()
+    st.subheader("Or upload a Parquet file directly")
 
-# ============================================================
-# TAB 2 — SCATTER PLOTS
-# ============================================================
-with tab2:
-    st.header("Scatter Plot Viewer")
-
-    # --- Option 1: Upload parquet directly ---
-    uploaded_parquet = st.file_uploader(
-        "Upload a Parquet file",
-        type=["parquet"]
-    )
-
-    df = None
+    uploaded_parquet = st.file_uploader("Upload Parquet", type=["parquet"])
 
     if uploaded_parquet is not None:
         df = pd.read_parquet(uploaded_parquet)
-        st.success("Using uploaded Parquet file")
+        st.session_state.df = df
+        st.session_state.current_file = uploaded_parquet.name
+        st.session_state.active_tab = 1
+        st.rerun()
 
+
+# ======================
+# TAB 2 — Scatter Plot
+# ======================
+with tabs[1]:
+    st.header("Scatter Plot")
+
+    # Load parquet from Data folder (optional)
+    parquet_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".parquet")]
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        selected_file = st.selectbox(
+            "Load from project Data folder",
+            ["None"] + parquet_files
+        )
+
+    with col2:
+        if selected_file != "None" and st.button("Load file"):
+            path = os.path.join(DATA_FOLDER, selected_file)
+            st.session_state.df = pd.read_parquet(path)
+            st.session_state.current_file = selected_file
+            st.rerun()
+
+    df = st.session_state.df
+
+    if df is None:
+        st.info("Upload or load a dataset to start.")
     else:
-        # --- Option 2: Load from data folder ---
-        parquet_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".parquet")]
+        st.success(f"Loaded: {st.session_state.current_file}")
+        st.write(f"Rows: {len(df):,} | Columns: {len(df.columns)}")
 
-        if parquet_files:
-            selected_file = st.selectbox("Or select a file from server", parquet_files)
-            df = pd.read_parquet(os.path.join(DATA_FOLDER, selected_file))
-        else:
-            st.warning("No parquet files available. Upload one or convert a TXT first.")
-
-    # ============================================================
-    # Plot section
-    # ============================================================
-    if df is not None:
-
-        numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+        numeric_cols = df.select_dtypes(include="number").columns.tolist()
 
         if len(numeric_cols) < 2:
             st.warning("Need at least two numeric columns.")
         else:
-            st.subheader("Scatter Plot")
+            colx, coly = st.columns(2)
 
-            col1, col2 = st.columns(2)
-
-            with col1:
+            with colx:
                 x_col = st.selectbox("X axis", numeric_cols)
 
-            with col2:
+            with coly:
                 y_col = st.selectbox("Y axis", numeric_cols)
 
-            # Simple filtering UI
-            st.markdown("### Filter")
+            # Filtering UI
+            st.subheader("Filter")
 
-            filter_col = st.selectbox("Column to filter", numeric_cols)
+            filter_col = st.selectbox("Filter column", ["None"] + numeric_cols)
 
-            min_val = float(df[filter_col].min())
-            max_val = float(df[filter_col].max())
+            df_filtered = df
 
-            col_min, col_max = st.columns(2)
+            if filter_col != "None":
+                fcol1, fcol2 = st.columns(2)
+                with fcol1:
+                    min_val = st.number_input("Min value", value=float(df[filter_col].min()))
+                with fcol2:
+                    max_val = st.number_input("Max value", value=float(df[filter_col].max()))
 
-            with col_min:
-                user_min = st.number_input("Min value", value=min_val)
+                df_filtered = df[(df[filter_col] >= min_val) & (df[filter_col] <= max_val)]
 
-            with col_max:
-                user_max = st.number_input("Max value", value=max_val)
-
-            df_filtered = df[(df[filter_col] >= user_min) & (df[filter_col] <= user_max)]
-
-            # Highlight filtered points
-            df["Selection"] = "Other"
-            df.loc[df_filtered.index, "Selection"] = "Filtered"
-
+            # Scatter plot
             fig = px.scatter(
                 df,
                 x=x_col,
                 y=y_col,
-                color="Selection",
-                template="plotly_white"
+                opacity=0.4,
+            )
+
+            fig.add_scatter(
+                x=df_filtered[x_col],
+                y=df_filtered[y_col],
+                mode="markers",
+                name="Filtered",
             )
 
             fig.update_layout(
-                height=600,
-                xaxis=dict(tickformat="d"),
-                yaxis=dict(tickformat="d")
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                height=600
             )
 
             st.plotly_chart(fig, use_container_width=True)
