@@ -2,246 +2,273 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import io
 import os
 
 st.set_page_config(layout="wide")
+st.title("Data Tool")
 
-DATA_FOLDER = "Data"
+# =====================================================
+# TABS
+# =====================================================
+tab_convert, tab_plot = st.tabs(["TXT → Parquet", "Scatter plots"])
 
-st.title("Interactive Scatter Tool")
+# =====================================================
+# TAB 1 — TXT to Parquet
+# =====================================================
+with tab_convert:
+    st.header("Convert TXT to Parquet")
 
-# ==============================
-# Load parquet file
-# ==============================
-uploaded_parquet = st.file_uploader(
-    "Upload Parquet file", type=["parquet"]
-)
+    uploaded_txt = st.file_uploader("Upload TXT file", type=["txt"])
 
-if uploaded_parquet is not None:
-    df = pd.read_parquet(uploaded_parquet)
-else:
-    parquet_files = []
-    if os.path.exists(DATA_FOLDER):
-        parquet_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".parquet")]
+    if uploaded_txt is not None:
+        # Read tab-separated file
+        df_txt = pd.read_csv(uploaded_txt, sep="\t", header=None)
 
-    if not parquet_files:
-        st.warning("Upload a parquet file or place files inside /Data")
+        # First row = column names
+        df_txt.columns = df_txt.iloc[0]
+
+        # Second row = units
+        units = df_txt.iloc[1].to_dict()
+
+        # Data starts from third row
+        df_txt = df_txt.iloc[2:].reset_index(drop=True)
+
+        # Convert numeric
+        for col in df_txt.columns:
+            df_txt[col] = pd.to_numeric(df_txt[col], errors="ignore")
+
+        st.success("File loaded")
+
+        # Download parquet
+        buffer = io.BytesIO()
+        df_txt.to_parquet(buffer, index=False)
+
+        st.download_button(
+            "Download Parquet",
+            buffer.getvalue(),
+            file_name="converted.parquet"
+        )
+
+# =====================================================
+# TAB 2 — SCATTER TOOL
+# =====================================================
+with tab_plot:
+
+    st.header("Interactive Scatter")
+
+    uploaded_parquet = st.file_uploader(
+        "Upload Parquet file",
+        type=["parquet"],
+        key="parquet_uploader"
+    )
+
+    if uploaded_parquet is None:
+        st.info("Upload a parquet file to start")
         st.stop()
 
-    selected_file = st.selectbox("Select file", parquet_files)
-    df = pd.read_parquet(os.path.join(DATA_FOLDER, selected_file))
+    df = pd.read_parquet(uploaded_parquet)
 
-# ==============================
-# Units extraction (row 2)
-# ==============================
-units_dict = {}
-if len(df) > 1:
-    units_row = df.iloc[1]
-    for col in df.columns:
-        unit = str(units_row[col])
-        if unit != "-" and unit != "nan":
-            units_dict[col] = unit
-        else:
-            units_dict[col] = ""
-
-# Remove header rows if present
-try:
-    df = df.iloc[2:].reset_index(drop=True)
-except:
-    pass
-
-# Convert numeric
-for col in df.columns:
-    df[col] = pd.to_numeric(df[col], errors="ignore")
-
-numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-
-if len(numeric_cols) < 2:
-    st.error("Need at least two numeric columns")
-    st.stop()
-
-# ==============================
-# Sidebar controls
-# ==============================
-st.sidebar.header("Layout")
-
-num_plots = st.sidebar.number_input("Number of plots", 1, 6, 1)
-plots_per_row = st.sidebar.number_input("Plots per row", 1, 3, 2)
-
-# ==============================
-# Filters (clean UI)
-# ==============================
-st.sidebar.header("Filters")
-
-selected_filter_cols = st.sidebar.multiselect(
-    "Select variables to filter",
-    numeric_cols
-)
-
-filter_values = {}
-active_filters = []
-
-for col in selected_filter_cols:
-    st.sidebar.markdown(f"**{col}**")
-    row = st.sidebar.columns([1, 1, 1])
-
-    enabled = row[0].checkbox("On", key=f"enable_{col}")
-
-    if enabled:
-        min_val = row[1].number_input(
-            "min",
-            value=float(df[col].min()),
-            label_visibility="collapsed",
-            key=f"{col}_min"
-        )
-        max_val = row[2].number_input(
-            "max",
-            value=float(df[col].max()),
-            label_visibility="collapsed",
-            key=f"{col}_max"
-        )
-
-        filter_values[col] = (min_val, max_val)
-        active_filters.append(col)
-
-# Apply filters
-if active_filters:
-    df_filtered = df.copy()
-    for col, (mn, mx) in filter_values.items():
-        df_filtered = df_filtered[
-            (df_filtered[col] >= mn) & (df_filtered[col] <= mx)
-        ]
-    has_filter = True
-else:
-    df_filtered = pd.DataFrame()
-    has_filter = False
-
-# ==============================
-# Plot grid
-# ==============================
-rows = int(np.ceil(num_plots / plots_per_row))
-plot_index = 0
-
-for r in range(rows):
-    cols = st.columns(plots_per_row)
-
-    for c in range(plots_per_row):
-        if plot_index >= num_plots:
-            break
-
-        with cols[c]:
-            st.markdown(f"### Plot {plot_index + 1}")
-
-            x_col = st.selectbox(
-                "X",
-                numeric_cols,
-                key=f"x_{plot_index}"
-            )
-            y_col = st.selectbox(
-                "Y",
-                numeric_cols,
-                index=1,
-                key=f"y_{plot_index}"
-            )
-
-            # ==============================
-            # Grid spacing (safe)
-            # ==============================
-            x_min, x_max = df[x_col].min(), df[x_col].max()
-            y_min, y_max = df[y_col].min(), df[y_col].max()
-
-            default_spacing = (x_max - x_min) / 10 if (x_max - x_min) != 0 else 1.0
-
-            spacing = st.number_input(
-                "Grid spacing",
-                min_value=0.000001,
-                value=float(default_spacing),
-                format="%f",
-                key=f"spacing_{plot_index}"
-            )
-
-            if spacing <= 0 or np.isnan(spacing):
-                spacing = default_spacing
-
-            # Limit number of grid lines (performance protection)
-            max_lines = 200
-
-            def safe_ticks(min_v, max_v, step):
-                if step <= 0:
-                    return None
-                count = (max_v - min_v) / step
-                if count > max_lines:
-                    step = (max_v - min_v) / max_lines
-                return np.arange(min_v, max_v + step, step)
-
-            x_ticks = safe_ticks(x_min, x_max, spacing)
-            y_ticks = safe_ticks(y_min, y_max, spacing)
-
-            # ==============================
-            # Build figure
-            # ==============================
-            fig = go.Figure()
-
-            # Base points (unfiltered only)
-            if has_filter and not df_filtered.empty:
-                df_base = df.drop(df_filtered.index)
+    # =====================================================
+    # Extract units if present (from original TXT format)
+    # =====================================================
+    units_dict = {}
+    try:
+        # If first rows still contain headers/units
+        possible_units = df.iloc[0]
+        for col in df.columns:
+            val = str(possible_units[col])
+            if val != "-" and not val.replace(".", "", 1).isdigit():
+                units_dict[col] = val
             else:
-                df_base = df
+                units_dict[col] = ""
+    except:
+        units_dict = {col: "" for col in df.columns}
 
-            fig.add_trace(
-                go.Scatter(
+    # Convert numeric safely
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="ignore")
+
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+
+    if len(numeric_cols) < 2:
+        st.error("Need at least two numeric columns")
+        st.stop()
+
+    # =====================================================
+    # Sidebar — layout
+    # =====================================================
+    st.sidebar.header("Layout")
+
+    num_plots = st.sidebar.number_input("Number of plots", 1, 6, 1)
+    plots_per_row = st.sidebar.number_input("Plots per row", 1, 3, 2)
+
+    # =====================================================
+    # Sidebar — filters
+    # =====================================================
+    st.sidebar.header("Filters")
+
+    selected_filter_cols = st.sidebar.multiselect(
+        "Select variables",
+        numeric_cols
+    )
+
+    filter_values = {}
+    active_filters = []
+
+    for col in selected_filter_cols:
+        st.sidebar.markdown(f"**{col}**")
+        row = st.sidebar.columns([1, 1, 1])
+
+        enabled = row[0].checkbox("On", key=f"enable_{col}")
+
+        if enabled:
+            min_val = row[1].number_input(
+                "min",
+                value=float(df[col].min()),
+                label_visibility="collapsed",
+                key=f"{col}_min"
+            )
+            max_val = row[2].number_input(
+                "max",
+                value=float(df[col].max()),
+                label_visibility="collapsed",
+                key=f"{col}_max"
+            )
+
+            filter_values[col] = (min_val, max_val)
+            active_filters.append(col)
+
+    # Apply filters
+    if active_filters:
+        df_filtered = df.copy()
+        for col, (mn, mx) in filter_values.items():
+            df_filtered = df_filtered[
+                (df_filtered[col] >= mn) &
+                (df_filtered[col] <= mx)
+            ]
+        has_filter = True
+    else:
+        df_filtered = pd.DataFrame()
+        has_filter = False
+
+    # =====================================================
+    # Plot grid
+    # =====================================================
+    rows = int(np.ceil(num_plots / plots_per_row))
+    plot_index = 0
+
+    for r in range(rows):
+        cols = st.columns(plots_per_row)
+
+        for c in range(plots_per_row):
+            if plot_index >= num_plots:
+                break
+
+            with cols[c]:
+                st.markdown(f"### Plot {plot_index + 1}")
+
+                x_col = st.selectbox(
+                    "X",
+                    numeric_cols,
+                    key=f"x_{plot_index}"
+                )
+                y_col = st.selectbox(
+                    "Y",
+                    numeric_cols,
+                    index=1,
+                    key=f"y_{plot_index}"
+                )
+
+                # Axis ranges
+                x_min, x_max = df[x_col].min(), df[x_col].max()
+                y_min, y_max = df[y_col].min(), df[y_col].max()
+
+                # Default spacing
+                default_x = (x_max - x_min) / 10 if x_max != x_min else 1.0
+                default_y = (y_max - y_min) / 10 if y_max != y_min else 1.0
+
+                col_sp = st.columns(2)
+                x_spacing = col_sp[0].number_input(
+                    "X spacing",
+                    min_value=0.000001,
+                    value=float(default_x),
+                    key=f"xsp_{plot_index}"
+                )
+                y_spacing = col_sp[1].number_input(
+                    "Y spacing",
+                    min_value=0.000001,
+                    value=float(default_y),
+                    key=f"ysp_{plot_index}"
+                )
+
+                # Limit grid density
+                MAX_LINES = 200
+
+                def safe_ticks(min_v, max_v, step):
+                    if step <= 0:
+                        return None
+                    count = (max_v - min_v) / step
+                    if count > MAX_LINES:
+                        step = (max_v - min_v) / MAX_LINES
+                    return np.arange(min_v, max_v + step, step)
+
+                x_ticks = safe_ticks(x_min, x_max, x_spacing)
+                y_ticks = safe_ticks(y_min, y_max, y_spacing)
+
+                # =====================================================
+                # Plot
+                # =====================================================
+                fig = go.Figure()
+
+                # Base points
+                if has_filter and not df_filtered.empty:
+                    df_base = df.drop(df_filtered.index)
+                else:
+                    df_base = df
+
+                fig.add_trace(go.Scatter(
                     x=df_base[x_col],
                     y=df_base[y_col],
                     mode="markers",
                     marker=dict(color="blue", size=6),
-                    name="All",
-                    opacity=0.5
-                )
-            )
+                    opacity=0.5,
+                    name="All"
+                ))
 
-            # Filtered points on top
-            if has_filter and not df_filtered.empty:
-                fig.add_trace(
-                    go.Scatter(
+                # Filtered points on top
+                if has_filter and not df_filtered.empty:
+                    fig.add_trace(go.Scatter(
                         x=df_filtered[x_col],
                         y=df_filtered[y_col],
                         mode="markers",
-                        marker=dict(
-                            color="red",
-                            size=9,
-                            line=dict(width=1, color="black")
-                        ),
+                        marker=dict(color="red", size=9,
+                                    line=dict(width=1, color="black")),
                         name="Filtered"
-                    )
+                    ))
+
+                fig.update_layout(
+                    plot_bgcolor="white",
+                    paper_bgcolor="white",
+                    height=400,
+                    margin=dict(l=40, r=20, t=40, b=40),
+                    xaxis=dict(
+                        title=f"{x_col} ({units_dict.get(x_col,'')})",
+                        tickmode="array" if x_ticks is not None else "auto",
+                        tickvals=x_ticks,
+                        showgrid=True,
+                        gridcolor="lightgray"
+                    ),
+                    yaxis=dict(
+                        title=f"{y_col} ({units_dict.get(y_col,'')})",
+                        tickmode="array" if y_ticks is not None else "auto",
+                        tickvals=y_ticks,
+                        showgrid=True,
+                        gridcolor="lightgray"
+                    ),
+                    legend=dict(orientation="h")
                 )
 
-            # ==============================
-            # Layout
-            # ==============================
-            fig.update_layout(
-                plot_bgcolor="white",
-                paper_bgcolor="white",
-                height=400,
-                margin=dict(l=40, r=20, t=40, b=40),
-                xaxis=dict(
-                    title=f"{x_col} ({units_dict.get(x_col,'')})",
-                    tickmode="array" if x_ticks is not None else "auto",
-                    tickvals=x_ticks,
-                    showgrid=True,
-                    gridcolor="lightgray",
-                    griddash="solid"
-                ),
-                yaxis=dict(
-                    title=f"{y_col} ({units_dict.get(y_col,'')})",
-                    tickmode="array" if y_ticks is not None else "auto",
-                    tickvals=y_ticks,
-                    showgrid=True,
-                    gridcolor="lightgray",
-                    griddash="solid"
-                ),
-                legend=dict(orientation="h")
-            )
+                st.plotly_chart(fig, use_container_width=True)
 
-            st.plotly_chart(fig, use_container_width=True)
-
-        plot_index += 1
+            plot_index += 1
