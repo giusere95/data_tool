@@ -1,206 +1,194 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import duckdb
-import json
+import numpy as np
 import os
+from io import BytesIO
 
-# =====================
-# PAGE CONFIG
-# =====================
 st.set_page_config(layout="wide")
-st.title("Data Scatter Explorer")
 
+# =========================
+# CONFIG
+# =========================
 DATA_FOLDER = "Data"
-UNITS_FILE = "column_units.json"
+os.makedirs(DATA_FOLDER, exist_ok=True)
 
-# =====================
-# LOAD UNITS
-# =====================
-if os.path.exists(UNITS_FILE):
-    with open(UNITS_FILE, "r") as f:
-        column_units = json.load(f)
-else:
-    column_units = {}
+st.title("Data Tool – Scatter & Converter")
 
-# =====================
-# LOAD PARQUET FILES
-# =====================
+# =========================
+# FUNCTIONS
+# =========================
+
+def txt_to_dataframe(uploaded_file):
+    """Convert TXT (tab separated) to DataFrame and extract units"""
+    df_raw = pd.read_csv(uploaded_file, sep="\t", header=None)
+
+    headers = df_raw.iloc[0].tolist()
+    units = df_raw.iloc[1].tolist()
+
+    df = df_raw.iloc[2:].reset_index(drop=True)
+    df.columns = headers
+
+    # Convert numeric where possible
+    df = df.apply(pd.to_numeric, errors="ignore")
+
+    return df, dict(zip(headers, units))
+
+
+def dataframe_to_parquet_bytes(df):
+    buffer = BytesIO()
+    df.to_parquet(buffer, index=False)
+    buffer.seek(0)
+    return buffer
+
+
+# =========================
+# SIDEBAR – DATA SOURCES
+# =========================
+st.sidebar.header("Data Sources")
+
+dataframes = []
+column_units = {}
+
+# ---- Existing Parquet files ----
 parquet_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".parquet")]
 
-selected_files = st.sidebar.multiselect(
-    "Select file(s)",
-    parquet_files
+if parquet_files:
+    selected_parquets = st.sidebar.multiselect(
+        "Select Parquet files",
+        parquet_files
+    )
+
+    for f in selected_parquets:
+        path = os.path.join(DATA_FOLDER, f)
+        df_pq = pd.read_parquet(path)
+        dataframes.append(df_pq)
+
+# =========================
+# TXT UPLOAD SECTION
+# =========================
+st.sidebar.markdown("---")
+st.sidebar.subheader("Upload TXT")
+
+uploaded_txt_files = st.sidebar.file_uploader(
+    "Upload TXT files",
+    type=["txt"],
+    accept_multiple_files=True
 )
 
-if not selected_files:
-    st.info("Select at least one file.")
+uploaded_data = []
+
+if uploaded_txt_files:
+    for uploaded_file in uploaded_txt_files:
+        df_txt, units_txt = txt_to_dataframe(uploaded_file)
+        uploaded_data.append((uploaded_file.name, df_txt, units_txt))
+
+# =========================
+# MAIN AREA – PREVIEW & SAVE
+# =========================
+if uploaded_data:
+    st.header("Uploaded TXT Preview")
+
+    for name, df_txt, units_txt in uploaded_data:
+        with st.expander(f"{name} ({len(df_txt)} rows)"):
+            st.dataframe(df_txt.head(50))
+
+            col1, col2 = st.columns(2)
+
+            # Save to server
+            with col1:
+                if st.button(f"Save {name} as Parquet"):
+                    save_name = name.replace(".txt", ".parquet")
+                    path = os.path.join(DATA_FOLDER, save_name)
+                    df_txt.to_parquet(path, index=False)
+                    st.success(f"Saved to Data/{save_name}")
+
+            # Download
+            with col2:
+                parquet_bytes = dataframe_to_parquet_bytes(df_txt)
+                st.download_button(
+                    label="Download Parquet",
+                    data=parquet_bytes,
+                    file_name=name.replace(".txt", ".parquet"),
+                    mime="application/octet-stream"
+                )
+
+        # Add to active dataset
+        dataframes.append(df_txt)
+        column_units.update(units_txt)
+
+# =========================
+# STOP IF NO DATA
+# =========================
+if not dataframes:
+    st.info("Upload TXT files or select Parquet files from sidebar.")
     st.stop()
 
-# =====================
-# LOAD DATA WITH DUCKDB
-# =====================
-con = duckdb.connect()
-file_paths = [os.path.join(DATA_FOLDER, f) for f in selected_files]
+# =========================
+# MERGE DATA
+# =========================
+df = pd.concat(dataframes, ignore_index=True)
 
-query = " UNION ALL ".join([f"SELECT * FROM read_parquet('{p}')" for p in file_paths])
-df = con.execute(query).fetch_df()
+# =========================
+# FILTER UI (Professional Compact)
+# =========================
+st.sidebar.markdown("---")
+st.sidebar.header("Filters")
 
-# Remove non-data rows if present
-df = df.iloc[2:].reset_index(drop=True)
-
-# Convert to numeric when possible
-df = df.apply(pd.to_numeric, errors="ignore")
-
-columns = list(df.columns)
-
-# =====================
-# SIDEBAR – FILTERS (COMPACT PROFESSIONAL UI)
-# =====================
-st.sidebar.markdown("## Filters")
-
-selected_filter_columns = st.sidebar.multiselect(
-    "Variables to filter",
-    columns
-)
-
+numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
 filters = {}
 
-for col in selected_filter_columns:
-    col_min = pd.to_numeric(df[col], errors="coerce").min()
-    col_max = pd.to_numeric(df[col], errors="coerce").max()
+for col in numeric_cols:
+    with st.sidebar.expander(col, expanded=False):
+        min_val = float(df[col].min())
+        max_val = float(df[col].max())
 
-    c1, c2 = st.sidebar.columns(2)
-    with c1:
-        min_val = st.number_input(
-            f"{col} min",
-            value=float(col_min),
-            key=f"{col}_min"
-        )
-    with c2:
-        max_val = st.number_input(
-            f"{col} max",
-            value=float(col_max),
-            key=f"{col}_max"
-        )
+        c1, c2 = st.columns(2)
+        with c1:
+            min_input = st.number_input(
+                "Min",
+                value=min_val,
+                key=f"{col}_min"
+            )
+        with c2:
+            max_input = st.number_input(
+                "Max",
+                value=max_val,
+                key=f"{col}_max"
+            )
 
-    filters[col] = (min_val, max_val)
+        filters[col] = (min_input, max_input)
 
 # Apply filters
-df_filtered = df.copy()
-for col, (min_val, max_val) in filters.items():
-    df_filtered = df_filtered[
-        (pd.to_numeric(df_filtered[col], errors="coerce") >= min_val) &
-        (pd.to_numeric(df_filtered[col], errors="coerce") <= max_val)
-    ]
+for col, (min_v, max_v) in filters.items():
+    df = df[(df[col] >= min_v) & (df[col] <= max_v)]
 
-# Create highlight column
-df["__filtered__"] = df.index.isin(df_filtered.index)
-df["__filtered__"] = df["__filtered__"].map({True: "Filtered", False: "Other"})
+# =========================
+# PLOT SECTION
+# =========================
+st.sidebar.markdown("---")
+st.sidebar.header("Plot")
 
-# =====================
-# PLOT SETTINGS
-# =====================
-st.sidebar.markdown("## Plots")
+all_columns = df.columns.tolist()
 
-num_plots = st.sidebar.number_input(
-    "Number of plots",
-    min_value=1,
-    max_value=6,
-    value=2
+x_col = st.sidebar.selectbox("X axis", all_columns)
+y_col = st.sidebar.selectbox("Y axis", all_columns)
+
+st.subheader("Scatter Plot")
+st.write(f"Rows after filtering: {len(df)}")
+
+st.scatter_chart(df[[x_col, y_col]])
+
+# =========================
+# DOWNLOAD FILTERED DATA
+# =========================
+st.markdown("---")
+st.subheader("Export filtered data")
+
+filtered_bytes = dataframe_to_parquet_bytes(df)
+
+st.download_button(
+    label="Download filtered Parquet",
+    data=filtered_bytes,
+    file_name="filtered.parquet",
+    mime="application/octet-stream"
 )
-
-plots_per_row = st.sidebar.number_input(
-    "Plots per row",
-    min_value=1,
-    max_value=3,
-    value=2
-)
-
-# =====================
-# DISPLAY PLOTS
-# =====================
-for row_start in range(0, num_plots, plots_per_row):
-
-    cols_layout = st.columns(plots_per_row)
-
-    for i in range(plots_per_row):
-        plot_index = row_start + i
-        if plot_index >= num_plots:
-            break
-
-        with cols_layout[i]:
-
-            st.markdown(f"### Plot {plot_index + 1}")
-
-            x_col = st.selectbox(
-                "X axis",
-                columns,
-                key=f"x{plot_index}"
-            )
-
-            y_col = st.selectbox(
-                "Y axis",
-                columns,
-                key=f"y{plot_index}"
-            )
-
-            # Units
-            x_unit = column_units.get(x_col, "")
-            y_unit = column_units.get(y_col, "")
-
-            # Grid spacing (typed)
-            st.markdown("Grid spacing")
-            x_spacing = st.number_input(
-                "X spacing",
-                min_value=1.0,
-                value=1000.0,
-                key=f"xspace{plot_index}"
-            )
-
-            y_spacing = st.number_input(
-                "Y spacing",
-                min_value=1.0,
-                value=1000.0,
-                key=f"yspace{plot_index}"
-            )
-
-            # Scatter plot
-            fig = px.scatter(
-                df,
-                x=x_col,
-                y=y_col,
-                color="__filtered__",
-                color_discrete_map={
-                    "Filtered": "red",
-                    "Other": "lightgray"
-                }
-            )
-
-            # Axis titles with units
-            fig.update_layout(
-                xaxis_title=f"{x_col} ({x_unit})" if x_unit else x_col,
-                yaxis_title=f"{y_col} ({y_unit})" if y_unit else y_col,
-                plot_bgcolor="white",
-                paper_bgcolor="white",
-                font=dict(color="black")
-            )
-
-            # Full numbers (no 6M)
-            fig.update_xaxes(tickformat=",.0f")
-            fig.update_yaxes(tickformat=",.0f")
-
-            # Grid spacing
-            fig.update_xaxes(
-                dtick=x_spacing,
-                showgrid=True,
-                gridcolor="lightgray"
-            )
-
-            fig.update_yaxes(
-                dtick=y_spacing,
-                showgrid=True,
-                gridcolor="lightgray"
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
