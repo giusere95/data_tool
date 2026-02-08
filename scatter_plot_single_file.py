@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import os
 import json
 
@@ -41,7 +42,6 @@ with tab_upload:
 
         for file in uploaded_txt:
             try:
-                # Read TXT
                 df_raw = pd.read_csv(file, sep="\t", header=None)
 
                 headers = df_raw.iloc[0].tolist()
@@ -57,7 +57,7 @@ with tab_upload:
                 parquet_path = os.path.join(DATA_FOLDER, parquet_name)
                 df_data.to_parquet(parquet_path, index=False)
 
-                # Store units
+                # Save units
                 for h, u in zip(headers, units):
                     units_dict[h] = u
                 last_parquet_path = parquet_path
@@ -72,7 +72,6 @@ with tab_upload:
             with open(UNIT_FILE, "w", encoding="utf-8") as f:
                 json.dump(units_dict, f, ensure_ascii=False, indent=2)
 
-        # Automatically switch to Scatter tab with last converted file
         if last_parquet_path:
             st.session_state.df = pd.read_parquet(last_parquet_path)
             st.session_state.current_file = os.path.basename(last_parquet_path)
@@ -81,9 +80,7 @@ with tab_upload:
 
     st.divider()
     st.subheader("Or upload a Parquet file directly")
-
     uploaded_parquet = st.file_uploader("Upload Parquet", type=["parquet"])
-
     if uploaded_parquet is not None:
         st.session_state.df = pd.read_parquet(uploaded_parquet)
         st.session_state.current_file = uploaded_parquet.name
@@ -95,7 +92,6 @@ with tab_upload:
 # -----------------------------
 with tab_plot:
     st.header("Scatter Plot")
-
     df = st.session_state.df
 
     # Load units
@@ -124,33 +120,39 @@ with tab_plot:
             # Global filters
             st.sidebar.header("Global Filters")
             filter_cols = st.sidebar.multiselect("Columns to filter", numeric_cols)
-
             filter_values = {}
             for col in filter_cols:
                 min_val = st.sidebar.number_input(f"{col} min", value=float(df[col].min()))
                 max_val = st.sidebar.number_input(f"{col} max", value=float(df[col].max()))
                 filter_values[col] = (min_val, max_val)
 
-            # Apply global filters
-            df_filtered = df.copy()
-            for col, (mn, mx) in filter_values.items():
-                df_filtered = df_filtered[(df_filtered[col] >= mn) & (df_filtered[col] <= mx)]
-
             # Axis/grid spacing per plot
-            st.sidebar.header("Per-plot Axis Spacing")
+            st.sidebar.header("Per-plot Axis/Grid Spacing")
             x_spacing_list = []
             y_spacing_list = []
+            vertical_spacing_list = []
             for i in range(n_plots):
                 x_spacing_list.append(st.sidebar.number_input(f"X spacing Plot {i+1}", min_value=1, value=1))
                 y_spacing_list.append(st.sidebar.number_input(f"Y spacing Plot {i+1}", min_value=1, value=1))
+                vertical_spacing_list.append(st.sidebar.number_input(f"Vertical grid spacing Plot {i+1}", min_value=1, value=1))
+
+            # -----------------------------
+            # Apply global filter
+            # -----------------------------
+            if filter_cols:
+                df_filtered = df.copy()
+                for col, (mn, mx) in filter_values.items():
+                    df_filtered = df_filtered[(df_filtered[col] >= mn) & (df_filtered[col] <= mx)]
+                has_filter = True
+            else:
+                df_filtered = pd.DataFrame()
+                has_filter = False
 
             # -----------------------------
             # Create plots
             # -----------------------------
-            plot_indices = range(n_plots)
             rows = []
-
-            for i, idx in enumerate(plot_indices):
+            for i in range(n_plots):
                 if i % plots_per_row == 0:
                     row = st.columns(plots_per_row)
                     rows.append(row)
@@ -164,25 +166,34 @@ with tab_plot:
                     x_col = st.selectbox(f"X axis (Plot {i+1})", numeric_cols, key=f"x_{i}")
                     y_col = st.selectbox(f"Y axis (Plot {i+1})", numeric_cols, key=f"y_{i}")
 
+                    # Base scatter
                     fig = px.scatter(
                         df,
                         x=x_col,
                         y=y_col,
                         opacity=0.4,
+                        color_discrete_sequence=["blue"],
                         labels={
                             x_col: f"{x_col} ({units_dict.get(x_col, '')})",
                             y_col: f"{y_col} ({units_dict.get(y_col, '')})"
                         },
                     )
 
-                    # Highlight filtered points
-                    fig.add_scatter(
-                        x=df_filtered[x_col],
-                        y=df_filtered[y_col],
-                        mode="markers",
-                        name="Filtered",
-                        marker=dict(color="red", size=8),
-                    )
+                    # Add filtered points
+                    if has_filter and not df_filtered.empty:
+                        fig.add_scatter(
+                            x=df_filtered[x_col],
+                            y=df_filtered[y_col],
+                            mode="markers",
+                            name="Filtered",
+                            marker=dict(color="red", size=10),
+                        )
+
+                    # Add vertical grid lines per spacing
+                    x_min, x_max = df[x_col].min(), df[x_col].max()
+                    x_lines = list(range(int(x_min), int(x_max)+1, vertical_spacing_list[i]))
+                    for x in x_lines:
+                        fig.add_vline(x=x, line_width=1, line_dash="dash", line_color="lightgray")
 
                     fig.update_layout(
                         plot_bgcolor="white",
