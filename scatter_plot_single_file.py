@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import io
-import os
 
 st.set_page_config(layout="wide")
 st.title("Data Tool")
@@ -22,28 +21,28 @@ with tab_convert:
     uploaded_txt = st.file_uploader("Upload TXT file", type=["txt"])
 
     if uploaded_txt is not None:
-        # Read tab-separated file
-        df_txt = pd.read_csv(uploaded_txt, sep="\t", header=None)
+        # Read tab-separated
+        df_raw = pd.read_csv(uploaded_txt, sep="\t", header=None)
 
-        # First row = column names
-        df_txt.columns = df_txt.iloc[0]
+        # First row = names
+        df_raw.columns = df_raw.iloc[0]
 
         # Second row = units
-        units = df_txt.iloc[1].to_dict()
+        units = df_raw.iloc[1].astype(str).to_dict()
 
-        # Data starts from third row
-        df_txt = df_txt.iloc[2:].reset_index(drop=True)
+        # Data starts from row 3
+        df = df_raw.iloc[2:].reset_index(drop=True)
 
         # Convert numeric
-        for col in df_txt.columns:
-            df_txt[col] = pd.to_numeric(df_txt[col], errors="ignore")
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="ignore")
 
-        st.success("File loaded")
-
-        # Download parquet
+        # Save units in parquet metadata
         buffer = io.BytesIO()
-        df_txt.to_parquet(buffer, index=False)
+        df.attrs["units"] = units
+        df.to_parquet(buffer, index=False)
 
+        st.success("File ready")
         st.download_button(
             "Download Parquet",
             buffer.getvalue(),
@@ -64,26 +63,17 @@ with tab_plot:
     )
 
     if uploaded_parquet is None:
-        st.info("Upload a parquet file to start")
+        st.info("Upload a parquet file")
         st.stop()
 
     df = pd.read_parquet(uploaded_parquet)
 
     # =====================================================
-    # Extract units if present (from original TXT format)
+    # Units from metadata (if available)
     # =====================================================
-    units_dict = {}
-    try:
-        # If first rows still contain headers/units
-        possible_units = df.iloc[0]
-        for col in df.columns:
-            val = str(possible_units[col])
-            if val != "-" and not val.replace(".", "", 1).isdigit():
-                units_dict[col] = val
-            else:
-                units_dict[col] = ""
-    except:
-        units_dict = {col: "" for col in df.columns}
+    units_dict = df.attrs.get("units", {})
+    if units_dict is None:
+        units_dict = {}
 
     # Convert numeric safely
     for col in df.columns:
@@ -99,7 +89,6 @@ with tab_plot:
     # Sidebar — layout
     # =====================================================
     st.sidebar.header("Layout")
-
     num_plots = st.sidebar.number_input("Number of plots", 1, 6, 1)
     plots_per_row = st.sidebar.number_input("Plots per row", 1, 3, 2)
 
@@ -168,12 +157,16 @@ with tab_plot:
             with cols[c]:
                 st.markdown(f"### Plot {plot_index + 1}")
 
-                x_col = st.selectbox(
+                # ==============================
+                # Compact X/Y selectors
+                # ==============================
+                xy_row = st.columns(2)
+                x_col = xy_row[0].selectbox(
                     "X",
                     numeric_cols,
                     key=f"x_{plot_index}"
                 )
-                y_col = st.selectbox(
+                y_col = xy_row[1].selectbox(
                     "Y",
                     numeric_cols,
                     index=1,
@@ -181,40 +174,69 @@ with tab_plot:
                 )
 
                 # Axis ranges
-                x_min, x_max = df[x_col].min(), df[x_col].max()
-                y_min, y_max = df[y_col].min(), df[y_col].max()
+                x_min_data, x_max_data = df[x_col].min(), df[x_col].max()
+                y_min_data, y_max_data = df[y_col].min(), df[y_col].max()
 
-                # Default spacing
-                default_x = (x_max - x_min) / 10 if x_max != x_min else 1.0
-                default_y = (y_max - y_min) / 10 if y_max != y_min else 1.0
-
-                col_sp = st.columns(2)
-                x_spacing = col_sp[0].number_input(
+                # ==============================
+                # Axis controls
+                # ==============================
+                ctrl1 = st.columns(2)
+                x_spacing = ctrl1[0].number_input(
                     "X spacing",
                     min_value=0.000001,
-                    value=float(default_x),
+                    value=float((x_max_data - x_min_data) / 10 if x_max_data != x_min_data else 1.0),
                     key=f"xsp_{plot_index}"
                 )
-                y_spacing = col_sp[1].number_input(
+                y_spacing = ctrl1[1].number_input(
                     "Y spacing",
                     min_value=0.000001,
-                    value=float(default_y),
+                    value=float((y_max_data - y_min_data) / 10 if y_max_data != y_min_data else 1.0),
                     key=f"ysp_{plot_index}"
                 )
 
-                # Limit grid density
+                ctrl2 = st.columns(2)
+                x_decimals = ctrl2[0].number_input(
+                    "X decimals",
+                    min_value=0,
+                    max_value=10,
+                    value=2,
+                    key=f"xdec_{plot_index}"
+                )
+                y_decimals = ctrl2[1].number_input(
+                    "Y decimals",
+                    min_value=0,
+                    max_value=10,
+                    value=2,
+                    key=f"ydec_{plot_index}"
+                )
+
+                ctrl3 = st.columns(2)
+                x_start = ctrl3[0].number_input(
+                    "X start",
+                    value=float(x_min_data),
+                    key=f"xstart_{plot_index}"
+                )
+                y_start = ctrl3[1].number_input(
+                    "Y start",
+                    value=float(y_min_data),
+                    key=f"ystart_{plot_index}"
+                )
+
+                # =====================================================
+                # Safe ticks (performance protection)
+                # =====================================================
                 MAX_LINES = 200
 
-                def safe_ticks(min_v, max_v, step):
+                def safe_ticks(start, max_v, step):
                     if step <= 0:
                         return None
-                    count = (max_v - min_v) / step
+                    count = (max_v - start) / step
                     if count > MAX_LINES:
-                        step = (max_v - min_v) / MAX_LINES
-                    return np.arange(min_v, max_v + step, step)
+                        step = (max_v - start) / MAX_LINES
+                    return np.arange(start, max_v + step, step)
 
-                x_ticks = safe_ticks(x_min, x_max, x_spacing)
-                y_ticks = safe_ticks(y_min, y_max, y_spacing)
+                x_ticks = safe_ticks(x_start, x_max_data, x_spacing)
+                y_ticks = safe_ticks(y_start, y_max_data, y_spacing)
 
                 # =====================================================
                 # Plot
@@ -247,22 +269,28 @@ with tab_plot:
                         name="Filtered"
                     ))
 
+                # Axis labels with units
+                x_unit = units_dict.get(x_col, "")
+                y_unit = units_dict.get(y_col, "")
+
                 fig.update_layout(
                     plot_bgcolor="white",
                     paper_bgcolor="white",
                     height=400,
                     margin=dict(l=40, r=20, t=40, b=40),
                     xaxis=dict(
-                        title=f"{x_col} ({units_dict.get(x_col,'')})",
+                        title=f"{x_col} ({x_unit})" if x_unit else x_col,
                         tickmode="array" if x_ticks is not None else "auto",
                         tickvals=x_ticks,
+                        tickformat=f".{int(x_decimals)}f",
                         showgrid=True,
                         gridcolor="lightgray"
                     ),
                     yaxis=dict(
-                        title=f"{y_col} ({units_dict.get(y_col,'')})",
+                        title=f"{y_col} ({y_unit})" if y_unit else y_col,
                         tickmode="array" if y_ticks is not None else "auto",
                         tickvals=y_ticks,
+                        tickformat=f".{int(y_decimals)}f",
                         showgrid=True,
                         gridcolor="lightgray"
                     ),
