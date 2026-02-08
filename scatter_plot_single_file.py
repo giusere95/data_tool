@@ -115,15 +115,13 @@ with tab_plot:
             st.warning("Need at least two numeric columns.")
         else:
             # -----------------------------
-            # Layout settings
+            # Sidebar settings
             # -----------------------------
             st.sidebar.header("Plot Configuration")
             n_plots = st.sidebar.number_input("Number of plots", min_value=1, max_value=6, value=2)
             plots_per_row = st.sidebar.number_input("Plots per row", min_value=1, max_value=3, value=2)
 
-            # -----------------------------
             # Global filters
-            # -----------------------------
             st.sidebar.header("Global Filters")
             filter_cols = st.sidebar.multiselect("Columns to filter", numeric_cols)
 
@@ -138,12 +136,13 @@ with tab_plot:
             for col, (mn, mx) in filter_values.items():
                 df_filtered = df_filtered[(df_filtered[col] >= mn) & (df_filtered[col] <= mx)]
 
-            # -----------------------------
-            # Axis spacing per plot
-            # -----------------------------
-            st.sidebar.header("Axis Spacing (per plot)")
-            x_spacing = st.sidebar.number_input("X-axis spacing", min_value=1, value=1)
-            y_spacing = st.sidebar.number_input("Y-axis spacing", min_value=1, value=1)
+            # Axis/grid spacing per plot
+            st.sidebar.header("Per-plot Axis Spacing")
+            x_spacing_list = []
+            y_spacing_list = []
+            for i in range(n_plots):
+                x_spacing_list.append(st.sidebar.number_input(f"X spacing Plot {i+1}", min_value=1, value=1))
+                y_spacing_list.append(st.sidebar.number_input(f"Y spacing Plot {i+1}", min_value=1, value=1))
 
             # -----------------------------
             # Create plots
@@ -176,20 +175,21 @@ with tab_plot:
                         },
                     )
 
-                    # Add filtered points in different color
+                    # Highlight filtered points
                     fig.add_scatter(
                         x=df_filtered[x_col],
                         y=df_filtered[y_col],
                         mode="markers",
                         name="Filtered",
+                        marker=dict(color="red", size=8),
                     )
 
                     fig.update_layout(
                         plot_bgcolor="white",
                         paper_bgcolor="white",
                         height=500,
-                        xaxis=dict(tickformat="d", dtick=x_spacing),
-                        yaxis=dict(tickformat="d", dtick=y_spacing)
+                        xaxis=dict(tickformat="d", dtick=x_spacing_list[i]),
+                        yaxis=dict(tickformat="d", dtick=y_spacing_list[i])
                     )
 
                     st.plotly_chart(fig, use_container_width=True)
