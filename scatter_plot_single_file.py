@@ -96,24 +96,6 @@ with tab_upload:
 with tab_plot:
     st.header("Scatter Plot")
 
-    # Load parquet from Data folder (optional)
-    parquet_files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".parquet")]
-
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        selected_file = st.selectbox(
-            "Load from project Data folder",
-            ["None"] + parquet_files
-        )
-
-    with col2:
-        if selected_file != "None" and st.button("Load file"):
-            path = os.path.join(DATA_FOLDER, selected_file)
-            st.session_state.df = pd.read_parquet(path)
-            st.session_state.current_file = selected_file
-            st.rerun()
-
     df = st.session_state.df
 
     # Load units
@@ -129,63 +111,85 @@ with tab_plot:
         st.write(f"Rows: {len(df):,} | Columns: {len(df.columns)}")
 
         numeric_cols = df.select_dtypes(include="number").columns.tolist()
-
         if len(numeric_cols) < 2:
             st.warning("Need at least two numeric columns.")
         else:
-            colx, coly = st.columns(2)
+            # -----------------------------
+            # Layout settings
+            # -----------------------------
+            st.sidebar.header("Plot Configuration")
+            n_plots = st.sidebar.number_input("Number of plots", min_value=1, max_value=6, value=2)
+            plots_per_row = st.sidebar.number_input("Plots per row", min_value=1, max_value=3, value=2)
 
-            with colx:
-                x_col = st.selectbox("X axis", numeric_cols)
+            # -----------------------------
+            # Global filters
+            # -----------------------------
+            st.sidebar.header("Global Filters")
+            filter_cols = st.sidebar.multiselect("Columns to filter", numeric_cols)
 
-            with coly:
-                y_col = st.selectbox("Y axis", numeric_cols)
+            filter_values = {}
+            for col in filter_cols:
+                min_val = st.sidebar.number_input(f"{col} min", value=float(df[col].min()))
+                max_val = st.sidebar.number_input(f"{col} max", value=float(df[col].max()))
+                filter_values[col] = (min_val, max_val)
 
-            # Filtering UI
-            st.subheader("Filter")
+            # Apply global filters
+            df_filtered = df.copy()
+            for col, (mn, mx) in filter_values.items():
+                df_filtered = df_filtered[(df_filtered[col] >= mn) & (df_filtered[col] <= mx)]
 
-            filter_col = st.selectbox("Filter column", ["None"] + numeric_cols)
+            # -----------------------------
+            # Axis spacing per plot
+            # -----------------------------
+            st.sidebar.header("Axis Spacing (per plot)")
+            x_spacing = st.sidebar.number_input("X-axis spacing", min_value=1, value=1)
+            y_spacing = st.sidebar.number_input("Y-axis spacing", min_value=1, value=1)
 
-            df_filtered = df
+            # -----------------------------
+            # Create plots
+            # -----------------------------
+            plot_indices = range(n_plots)
+            rows = []
 
-            if filter_col != "None":
-                fcol1, fcol2 = st.columns(2)
-                with fcol1:
-                    min_val = st.number_input(
-                        "Min value", value=float(df[filter_col].min())
+            for i, idx in enumerate(plot_indices):
+                if i % plots_per_row == 0:
+                    row = st.columns(plots_per_row)
+                    rows.append(row)
+
+                row_idx = i // plots_per_row
+                col_idx = i % plots_per_row
+                col = rows[row_idx][col_idx]
+
+                with col:
+                    st.subheader(f"Plot {i+1}")
+                    x_col = st.selectbox(f"X axis (Plot {i+1})", numeric_cols, key=f"x_{i}")
+                    y_col = st.selectbox(f"Y axis (Plot {i+1})", numeric_cols, key=f"y_{i}")
+
+                    fig = px.scatter(
+                        df,
+                        x=x_col,
+                        y=y_col,
+                        opacity=0.4,
+                        labels={
+                            x_col: f"{x_col} ({units_dict.get(x_col, '')})",
+                            y_col: f"{y_col} ({units_dict.get(y_col, '')})"
+                        },
                     )
-                with fcol2:
-                    max_val = st.number_input(
-                        "Max value", value=float(df[filter_col].max())
+
+                    # Add filtered points in different color
+                    fig.add_scatter(
+                        x=df_filtered[x_col],
+                        y=df_filtered[y_col],
+                        mode="markers",
+                        name="Filtered",
                     )
 
-                df_filtered = df[(df[filter_col] >= min_val) & (df[filter_col] <= max_val)]
+                    fig.update_layout(
+                        plot_bgcolor="white",
+                        paper_bgcolor="white",
+                        height=500,
+                        xaxis=dict(tickformat="d", dtick=x_spacing),
+                        yaxis=dict(tickformat="d", dtick=y_spacing)
+                    )
 
-            # Scatter plot
-            fig = px.scatter(
-                df,
-                x=x_col,
-                y=y_col,
-                opacity=0.4,
-                labels={
-                    x_col: f"{x_col} ({units_dict.get(x_col,'')})",
-                    y_col: f"{y_col} ({units_dict.get(y_col,'')})"
-                },
-            )
-
-            fig.add_scatter(
-                x=df_filtered[x_col],
-                y=df_filtered[y_col],
-                mode="markers",
-                name="Filtered",
-            )
-
-            fig.update_layout(
-                plot_bgcolor="white",
-                paper_bgcolor="white",
-                height=600,
-                xaxis=dict(tickformat="d"),
-                yaxis=dict(tickformat="d")
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True)
