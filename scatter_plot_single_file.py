@@ -91,11 +91,13 @@ with tab_plot:
         st.stop()
 
     # =====================================================
-    # Sidebar — layout
+    # Sidebar — layout compact
     # =====================================================
     st.sidebar.header("Layout")
-    num_plots = st.sidebar.number_input("Number of plots", 1, 6, 1)
-    plots_per_row = st.sidebar.number_input("Plots per row", 1, 3, 2)
+
+    colA, colB = st.sidebar.columns([1, 1])
+    num_plots = colA.number_input("Plots", 1, 6, 1, key="num_plots", label_visibility="collapsed")
+    plots_per_row = colB.number_input("Per row", 1, 3, 2, key="plots_row", label_visibility="collapsed")
 
     # =====================================================
     # Sidebar — filters
@@ -180,7 +182,7 @@ with tab_plot:
                 x_min_data, x_max_data = df[x_col].min(), df[x_col].max()
                 y_min_data, y_max_data = df[y_col].min(), df[y_col].max()
 
-                # Spacing
+                # Spacing + Decimals + Start in compact rows
                 ctrl1 = st.columns(2)
                 x_spacing = ctrl1[0].number_input(
                     "X spacing",
@@ -195,7 +197,6 @@ with tab_plot:
                     key=f"ysp_{plot_index}"
                 )
 
-                # Decimals
                 ctrl2 = st.columns(2)
                 x_decimals = ctrl2[0].number_input(
                     "X decimals", 0, 10, 2,
@@ -206,7 +207,6 @@ with tab_plot:
                     key=f"ydec_{plot_index}"
                 )
 
-                # Axis start
                 ctrl3 = st.columns(2)
                 x_start = ctrl3[0].number_input(
                     "X start",
