@@ -21,18 +21,13 @@ with tab_convert:
     uploaded_txt = st.file_uploader("Upload TXT file", type=["txt"])
 
     if uploaded_txt is not None:
-        # Read tab-separated file
         df_raw = pd.read_csv(uploaded_txt, sep="\t", header=None)
 
         # First row = column names
         df_raw.columns = df_raw.iloc[0]
 
-        # Keep first two rows (names + units)
-        df_parquet = df_raw.copy()
-
-        # Download parquet
         buffer = io.BytesIO()
-        df_parquet.to_parquet(buffer, index=False)
+        df_raw.to_parquet(buffer, index=False)
 
         st.success("File ready (units preserved)")
 
@@ -62,7 +57,7 @@ with tab_plot:
     df_raw = pd.read_parquet(uploaded_parquet)
 
     # =====================================================
-    # Extract units from second row
+    # Extract units (row 2)
     # =====================================================
     units_dict = {}
     if len(df_raw) > 1:
@@ -74,7 +69,6 @@ with tab_plot:
             else:
                 units_dict[col] = ""
 
-        # Actual data starts from row 3
         df = df_raw.iloc[2:].reset_index(drop=True)
     else:
         df = df_raw
@@ -91,16 +85,24 @@ with tab_plot:
         st.stop()
 
     # =====================================================
-    # Sidebar — layout compact
+    # Sidebar — Layout (compact)
     # =====================================================
     st.sidebar.header("Layout")
 
-    colA, colB = st.sidebar.columns([1, 1])
-    num_plots = colA.number_input("Plots", 1, 6, 1, key="num_plots", label_visibility="collapsed")
-    plots_per_row = colB.number_input("Per row", 1, 3, 2, key="plots_row", label_visibility="collapsed")
+    colA, colB = st.sidebar.columns(2)
+    num_plots = colA.number_input(
+        "Plots", 1, 6, 1,
+        key="num_plots",
+        label_visibility="collapsed"
+    )
+    plots_per_row = colB.number_input(
+        "Per row", 1, 3, 2,
+        key="plots_row",
+        label_visibility="collapsed"
+    )
 
     # =====================================================
-    # Sidebar — filters
+    # Sidebar — Filters
     # =====================================================
     st.sidebar.header("Filters")
 
@@ -149,10 +151,10 @@ with tab_plot:
         has_filter = False
 
     # =====================================================
-    # Sidebar — download filtered data
+    # Sidebar — Download filtered data
     # =====================================================
     if has_filter and not df_filtered.empty:
-        csv_buffer = df_filtered.to_csv(index=False).encode('utf-8')
+        csv_buffer = df_filtered.to_csv(index=False).encode("utf-8")
         st.sidebar.download_button(
             "Download filtered data",
             csv_buffer,
@@ -175,7 +177,7 @@ with tab_plot:
             with cols[c]:
                 st.markdown(f"### Plot {plot_index + 1}")
 
-                # Compact X/Y selection
+                # X/Y selection compact
                 xy_row = st.columns(2)
                 x_col = xy_row[0].selectbox(
                     "X",
@@ -189,11 +191,11 @@ with tab_plot:
                     key=f"y_{plot_index}"
                 )
 
-                # Axis ranges
+                # Data ranges
                 x_min_data, x_max_data = df[x_col].min(), df[x_col].max()
                 y_min_data, y_max_data = df[y_col].min(), df[y_col].max()
 
-                # Spacing + Decimals in compact rows
+                # Spacing
                 ctrl1 = st.columns(2)
                 x_spacing = ctrl1[0].number_input(
                     "X spacing",
@@ -208,6 +210,7 @@ with tab_plot:
                     key=f"ysp_{plot_index}"
                 )
 
+                # Decimals
                 ctrl2 = st.columns(2)
                 x_decimals = ctrl2[0].number_input(
                     "X decimals", 0, 10, 2,
@@ -221,13 +224,13 @@ with tab_plot:
                 # Safe ticks
                 MAX_LINES = 200
 
-                def safe_ticks(start, max_v, step):
+                def safe_ticks(min_v, max_v, step):
                     if step <= 0:
                         return None
-                    count = (max_v - start) / step
+                    count = (max_v - min_v) / step
                     if count > MAX_LINES:
-                        step = (max_v - start) / MAX_LINES
-                    return np.arange(start, max_v + step, step)
+                        step = (max_v - min_v) / MAX_LINES
+                    return np.arange(min_v, max_v + step, step)
 
                 x_ticks = safe_ticks(x_min_data, x_max_data, x_spacing)
                 y_ticks = safe_ticks(y_min_data, y_max_data, y_spacing)
@@ -237,7 +240,6 @@ with tab_plot:
                 # =====================================================
                 fig = go.Figure()
 
-                # Base points
                 if has_filter and not df_filtered.empty:
                     df_base = df.drop(df_filtered.index)
                 else:
@@ -252,7 +254,6 @@ with tab_plot:
                     name="All"
                 ))
 
-                # Filtered points (solid red, no border)
                 if has_filter and not df_filtered.empty:
                     fig.add_trace(go.Scatter(
                         x=df_filtered[x_col],
@@ -262,7 +263,6 @@ with tab_plot:
                         name="Filtered"
                     ))
 
-                # Axis labels with units
                 x_unit = units_dict.get(x_col, "")
                 y_unit = units_dict.get(y_col, "")
 
@@ -289,27 +289,40 @@ with tab_plot:
                     ),
                     legend=dict(
                         orientation="h",
-                        yanchor="bottom",
                         y=1.05,
-                        xanchor="right",
-                        x=1
+                        x=1,
+                        xanchor="right"
                     )
                 )
 
                 st.plotly_chart(fig, use_container_width=True)
 
                 # =====================================================
-                # Download plot as PNG with safe error handling
+                # Download buttons (PNG + HTML fallback)
                 # =====================================================
-                try:
-                    png_bytes = fig.to_image(format="png")
+                dcol1, dcol2 = st.columns(2)
+
+                with dcol1:
+                    try:
+                        png_bytes = fig.to_image(format="png")
+                        st.download_button(
+                            "PNG",
+                            data=png_bytes,
+                            file_name=f"plot_{plot_index + 1}.png",
+                            mime="image/png",
+                            key=f"png_{plot_index}"
+                        )
+                    except Exception:
+                        st.caption("PNG not available")
+
+                with dcol2:
+                    html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
                     st.download_button(
-                        "Download Plot PNG",
-                        data=png_bytes,
-                        file_name=f"plot_{plot_index + 1}.png",
-                        mime="image/png"
+                        "HTML",
+                        data=html_bytes,
+                        file_name=f"plot_{plot_index + 1}.html",
+                        mime="text/html",
+                        key=f"html_{plot_index}"
                     )
-                except ValueError:
-                    st.warning("Kaleido is not installed — PNG download disabled.")
 
             plot_index += 1
