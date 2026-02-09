@@ -299,14 +299,17 @@ with tab_plot:
                 st.plotly_chart(fig, use_container_width=True)
 
                 # =====================================================
-                # Download plot as PNG
+                # Download plot as PNG with safe error handling
                 # =====================================================
-                png_bytes = fig.to_image(format="png")
-                st.download_button(
-                    "Download Plot PNG",
-                    data=png_bytes,
-                    file_name=f"plot_{plot_index + 1}.png",
-                    mime="image/png"
-                )
+                try:
+                    png_bytes = fig.to_image(format="png")
+                    st.download_button(
+                        "Download Plot PNG",
+                        data=png_bytes,
+                        file_name=f"plot_{plot_index + 1}.png",
+                        mime="image/png"
+                    )
+                except ValueError:
+                    st.warning("Kaleido is not installed — PNG download disabled.")
 
             plot_index += 1
