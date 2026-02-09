@@ -182,7 +182,7 @@ with tab_plot:
                 x_min_data, x_max_data = df[x_col].min(), df[x_col].max()
                 y_min_data, y_max_data = df[y_col].min(), df[y_col].max()
 
-                # Spacing + Decimals + Start in compact rows
+                # Spacing + Decimals in compact rows
                 ctrl1 = st.columns(2)
                 x_spacing = ctrl1[0].number_input(
                     "X spacing",
@@ -207,18 +207,6 @@ with tab_plot:
                     key=f"ydec_{plot_index}"
                 )
 
-                ctrl3 = st.columns(2)
-                x_start = ctrl3[0].number_input(
-                    "X start",
-                    value=float(x_min_data),
-                    key=f"xstart_{plot_index}"
-                )
-                y_start = ctrl3[1].number_input(
-                    "Y start",
-                    value=float(y_min_data),
-                    key=f"ystart_{plot_index}"
-                )
-
                 # Safe ticks
                 MAX_LINES = 200
 
@@ -230,8 +218,8 @@ with tab_plot:
                         step = (max_v - start) / MAX_LINES
                     return np.arange(start, max_v + step, step)
 
-                x_ticks = safe_ticks(x_start, x_max_data, x_spacing)
-                y_ticks = safe_ticks(y_start, y_max_data, y_spacing)
+                x_ticks = safe_ticks(x_min_data, x_max_data, x_spacing)
+                y_ticks = safe_ticks(y_min_data, y_max_data, y_spacing)
 
                 # =====================================================
                 # Plot
@@ -271,7 +259,7 @@ with tab_plot:
                     plot_bgcolor="white",
                     paper_bgcolor="white",
                     height=400,
-                    margin=dict(l=40, r=20, t=40, b=40),
+                    margin=dict(l=40, r=20, t=60, b=40),
                     xaxis=dict(
                         title=f"{x_col} ({x_unit})" if x_unit else x_col,
                         tickmode="array" if x_ticks is not None else "auto",
@@ -288,7 +276,13 @@ with tab_plot:
                         showgrid=True,
                         gridcolor="lightgray"
                     ),
-                    legend=dict(orientation="h")
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.05,
+                        xanchor="right",
+                        x=1
+                    )
                 )
 
                 st.plotly_chart(fig, use_container_width=True)
