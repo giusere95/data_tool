@@ -149,6 +149,17 @@ with tab_plot:
         has_filter = False
 
     # =====================================================
+    # Sidebar — download filtered data
+    # =====================================================
+    if has_filter and not df_filtered.empty:
+        csv_buffer = df_filtered.to_csv(index=False).encode('utf-8')
+        st.sidebar.download_button(
+            "Download filtered data",
+            csv_buffer,
+            file_name="filtered_data.csv"
+        )
+
+    # =====================================================
     # Plot grid
     # =====================================================
     rows = int(np.ceil(num_plots / plots_per_row))
@@ -286,5 +297,16 @@ with tab_plot:
                 )
 
                 st.plotly_chart(fig, use_container_width=True)
+
+                # =====================================================
+                # Download plot as PNG
+                # =====================================================
+                png_bytes = fig.to_image(format="png")
+                st.download_button(
+                    "Download Plot PNG",
+                    data=png_bytes,
+                    file_name=f"plot_{plot_index + 1}.png",
+                    mime="image/png"
+                )
 
             plot_index += 1
