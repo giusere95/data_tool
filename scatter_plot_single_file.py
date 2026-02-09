@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import re
 import io
+import json
+from matplotlib.backends.backend_pdf import PdfPages
 
 st.set_page_config(layout="wide")
 st.title("Data Tool")
@@ -82,7 +84,6 @@ with tab1:
             mime="application/octet-stream"
         )
 
-        # Keep data available for plotting without re-upload
         st.session_state["df"] = df
         st.session_state["units"] = units
 
@@ -111,47 +112,44 @@ with tab2:
             st.stop()
 
         # -----------------------------
-        # Sidebar layout
+        # Sidebar
         # -----------------------------
         st.sidebar.header("Plot Settings")
 
-        # Compact row: number of plots + plots per row
         colA, colB = st.sidebar.columns(2)
         n_plots = colA.number_input("Number of plots", 1, 12, 1)
         plots_per_row = colB.number_input("Plots per row", 1, 4, 1)
 
-        # Axis selection (compact)
         c1, c2 = st.sidebar.columns(2)
         x_col = c1.selectbox("X axis", numeric_cols)
         y_col = c2.selectbox("Y axis", numeric_cols, index=1)
 
-        # Units display
         x_unit = units.get(x_col, "")
         y_unit = units.get(y_col, "")
 
-        # Axis spacing
         c3, c4 = st.sidebar.columns(2)
         x_spacing = c3.number_input("X spacing", value=1.0)
         y_spacing = c4.number_input("Y spacing", value=1.0)
 
-        # Axis decimals
         c5, c6 = st.sidebar.columns(2)
         x_decimals = c5.number_input("X decimals", 0, 6, 2)
         y_decimals = c6.number_input("Y decimals", 0, 6, 2)
 
-        # Axis start
         c7, c8 = st.sidebar.columns(2)
         x_start = c7.number_input("X start", value=float(df[x_col].min()))
         y_start = c8.number_input("Y start", value=float(df[y_col].min()))
 
         # -----------------------------
-        # Filtering
+        # Filter
         # -----------------------------
         st.sidebar.header("Filter")
 
         filter_col = st.sidebar.selectbox("Select filter column", ["None"] + numeric_cols)
 
         mask = np.ones(len(df), dtype=bool)
+
+        fmin = fmax = None
+        enable_filter = False
 
         if filter_col != "None":
             fmin, fmax = st.sidebar.slider(
@@ -170,6 +168,41 @@ with tab2:
                 mask = (df[filter_col] >= fmin) & (df[filter_col] <= fmax)
 
         # -----------------------------
+        # Save / Load configuration (NEW)
+        # -----------------------------
+        st.sidebar.header("Configuration")
+
+        config = {
+            "n_plots": n_plots,
+            "plots_per_row": plots_per_row,
+            "x_col": x_col,
+            "y_col": y_col,
+            "x_spacing": x_spacing,
+            "y_spacing": y_spacing,
+            "x_decimals": x_decimals,
+            "y_decimals": y_decimals,
+            "x_start": x_start,
+            "y_start": y_start,
+            "filter_col": filter_col,
+            "fmin": fmin,
+            "fmax": fmax,
+            "enable_filter": enable_filter
+        }
+
+        config_json = json.dumps(config, indent=2)
+        st.sidebar.download_button(
+            "Save config",
+            config_json,
+            file_name="plot_config.json"
+        )
+
+        uploaded_config = st.sidebar.file_uploader("Load config", type=["json"])
+        if uploaded_config is not None:
+            loaded_config = json.load(uploaded_config)
+            st.session_state["loaded_config"] = loaded_config
+            st.sidebar.success("Config loaded")
+
+        # -----------------------------
         # Plot grid
         # -----------------------------
         rows = int(np.ceil(n_plots / plots_per_row))
@@ -183,7 +216,6 @@ with tab2:
         for i in range(n_plots):
             ax = axes[i]
 
-            # Unfiltered (blue)
             ax.scatter(
                 df.loc[~mask, x_col],
                 df.loc[~mask, y_col],
@@ -191,7 +223,6 @@ with tab2:
                 alpha=0.5
             )
 
-            # Filtered (red on top, no border)
             ax.scatter(
                 df.loc[mask, x_col],
                 df.loc[mask, y_col],
@@ -201,7 +232,6 @@ with tab2:
                 zorder=3
             )
 
-            # Axis ticks using start value
             x_ticks = generate_ticks(x_start, df[x_col].max(), x_spacing)
             y_ticks = generate_ticks(y_start, df[y_col].max(), y_spacing)
 
@@ -213,7 +243,6 @@ with tab2:
                 ax.set_yticks(y_ticks)
                 ax.set_ylim(y_start, df[y_col].max())
 
-            # Decimal formatting
             ax.xaxis.set_major_formatter(
                 plt.FuncFormatter(lambda val, _: f"{val:.{x_decimals}f}")
             )
@@ -221,18 +250,43 @@ with tab2:
                 plt.FuncFormatter(lambda val, _: f"{val:.{y_decimals}f}")
             )
 
-            # Labels with units
             xlabel = f"{x_col} ({x_unit})" if x_unit else x_col
             ylabel = f"{y_col} ({y_unit})" if y_unit else y_col
 
             ax.set_xlabel(xlabel)
             ax.set_ylabel(ylabel)
 
-            # Continuous grid
             ax.grid(True, linestyle="-", alpha=0.4)
 
-        # Remove empty axes
         for j in range(n_plots, len(axes)):
             fig.delaxes(axes[j])
 
         st.pyplot(fig)
+
+        # -----------------------------
+        # Export plots (NEW)
+        # -----------------------------
+        st.subheader("Export")
+
+        png_buffer = io.BytesIO()
+        fig.savefig(png_buffer, format="png", bbox_inches="tight")
+        png_buffer.seek(0)
+
+        st.download_button(
+            "Download PNG",
+            png_buffer,
+            file_name="plot.png",
+            mime="image/png"
+        )
+
+        pdf_buffer = io.BytesIO()
+        with PdfPages(pdf_buffer) as pdf:
+            pdf.savefig(fig, bbox_inches="tight")
+        pdf_buffer.seek(0)
+
+        st.download_button(
+            "Download PDF",
+            pdf_buffer,
+            file_name="plot.pdf",
+            mime="application/pdf"
+        )
