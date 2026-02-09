@@ -21,28 +21,21 @@ with tab_convert:
     uploaded_txt = st.file_uploader("Upload TXT file", type=["txt"])
 
     if uploaded_txt is not None:
-        # Read tab-separated
+        # Read tab-separated file
         df_raw = pd.read_csv(uploaded_txt, sep="\t", header=None)
 
-        # First row = names
+        # First row = column names
         df_raw.columns = df_raw.iloc[0]
 
-        # Second row = units
-        units = df_raw.iloc[1].astype(str).to_dict()
+        # Keep first two rows (names + units)
+        df_parquet = df_raw.copy()
 
-        # Data starts from row 3
-        df = df_raw.iloc[2:].reset_index(drop=True)
-
-        # Convert numeric
-        for col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="ignore")
-
-        # Save units in parquet metadata
+        # Download parquet
         buffer = io.BytesIO()
-        df.attrs["units"] = units
-        df.to_parquet(buffer, index=False)
+        df_parquet.to_parquet(buffer, index=False)
 
-        st.success("File ready")
+        st.success("File ready (units preserved)")
+
         st.download_button(
             "Download Parquet",
             buffer.getvalue(),
@@ -66,16 +59,28 @@ with tab_plot:
         st.info("Upload a parquet file")
         st.stop()
 
-    df = pd.read_parquet(uploaded_parquet)
+    df_raw = pd.read_parquet(uploaded_parquet)
 
     # =====================================================
-    # Units from metadata (if available)
+    # Extract units from second row
     # =====================================================
-    units_dict = df.attrs.get("units", {})
-    if units_dict is None:
-        units_dict = {}
+    units_dict = {}
+    if len(df_raw) > 1:
+        units_row = df_raw.iloc[1]
+        for col in df_raw.columns:
+            val = str(units_row[col])
+            if val != "-" and val.lower() != "nan":
+                units_dict[col] = val
+            else:
+                units_dict[col] = ""
 
-    # Convert numeric safely
+        # Actual data starts from row 3
+        df = df_raw.iloc[2:].reset_index(drop=True)
+    else:
+        df = df_raw
+        units_dict = {col: "" for col in df.columns}
+
+    # Convert numeric
     for col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="ignore")
 
@@ -157,9 +162,7 @@ with tab_plot:
             with cols[c]:
                 st.markdown(f"### Plot {plot_index + 1}")
 
-                # ==============================
-                # Compact X/Y selectors
-                # ==============================
+                # Compact X/Y selection
                 xy_row = st.columns(2)
                 x_col = xy_row[0].selectbox(
                     "X",
@@ -177,9 +180,7 @@ with tab_plot:
                 x_min_data, x_max_data = df[x_col].min(), df[x_col].max()
                 y_min_data, y_max_data = df[y_col].min(), df[y_col].max()
 
-                # ==============================
-                # Axis controls
-                # ==============================
+                # Spacing
                 ctrl1 = st.columns(2)
                 x_spacing = ctrl1[0].number_input(
                     "X spacing",
@@ -194,22 +195,18 @@ with tab_plot:
                     key=f"ysp_{plot_index}"
                 )
 
+                # Decimals
                 ctrl2 = st.columns(2)
                 x_decimals = ctrl2[0].number_input(
-                    "X decimals",
-                    min_value=0,
-                    max_value=10,
-                    value=2,
+                    "X decimals", 0, 10, 2,
                     key=f"xdec_{plot_index}"
                 )
                 y_decimals = ctrl2[1].number_input(
-                    "Y decimals",
-                    min_value=0,
-                    max_value=10,
-                    value=2,
+                    "Y decimals", 0, 10, 2,
                     key=f"ydec_{plot_index}"
                 )
 
+                # Axis start
                 ctrl3 = st.columns(2)
                 x_start = ctrl3[0].number_input(
                     "X start",
@@ -222,9 +219,7 @@ with tab_plot:
                     key=f"ystart_{plot_index}"
                 )
 
-                # =====================================================
-                # Safe ticks (performance protection)
-                # =====================================================
+                # Safe ticks
                 MAX_LINES = 200
 
                 def safe_ticks(start, max_v, step):
@@ -258,14 +253,13 @@ with tab_plot:
                     name="All"
                 ))
 
-                # Filtered points on top
+                # Filtered points (solid red, no border)
                 if has_filter and not df_filtered.empty:
                     fig.add_trace(go.Scatter(
                         x=df_filtered[x_col],
                         y=df_filtered[y_col],
                         mode="markers",
-                        marker=dict(color="red", size=9,
-                                    line=dict(width=1, color="black")),
+                        marker=dict(color="red", size=9),
                         name="Filtered"
                     ))
 
